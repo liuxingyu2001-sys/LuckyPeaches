@@ -1,0 +1,10 @@
+name: LuckyPeaches
+author: liuxingyu2001
+version: ${project.version}
+main: com.luckypeaches.LuckyPeaches
+api-version: 1.13
+commands:
+  luckypeach:
+    aliases: [luckyp, lp]
+    description: LuckyPeaches admin command.
+    permission: luckypeach.admin

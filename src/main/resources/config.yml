@@ -1,0 +1,118 @@
+settings:
+  # 调试模式 (开启后会输出详细日志信息)
+  debug: false
+  # 基础最高总生命值 (默认 100.0)
+  max_health_limit: 250
+  # VIP 额外生命值上限配置 (需要对应权限: luckypeaches.maxhealth.<key>)
+  # 例如: 拥有 luckypeaches.maxhealth.vip1 权限的玩家上限为 150
+  vip_health_limits:
+    vip: 10000
+  # 死亡时扣除蟠桃加成设置
+  death_penalty:
+    # 是否启用死亡惩罚
+    enabled: true
+    # 触发扣除的血量阈值（当玩家血量上限超过此值时死亡会扣除蟠桃加成）
+    health_threshold: 200.0
+    # 死亡冷却时间（毫秒），在此时间内再次死亡不扣除蟠桃血（默认10000毫秒=10秒）
+    death_cooldown_ms: 5000
+    # 基于权限的惩罚配置（需要权限: luckypeaches.deathpenalty.<key>）
+    # 玩家拥有多个权限时，取惩罚最少的配置
+    # 如果没有任何权限，使用default配置
+    penalty_groups:
+      default:
+        # 死亡时扣除的蟠桃加成比例（0.0-1.0，例如0.1表示扣除10%）
+        penalty_percentage: 0.01
+        # 每次死亡最少扣除的蟠桃加成
+        min_penalty: 1.0
+        # 每次死亡最多扣除的蟠桃加成
+        max_penalty: 200.0
+      vip:
+        penalty_percentage: 0.008
+        min_penalty: 0.5
+        max_penalty: 150.0
+      svip:
+        penalty_percentage: 0.005
+        min_penalty: 0.2
+        max_penalty: 100.0
+  # 成功时的音效 (参考 Spigot Sound 枚举)
+  success_sound: ENTITY_PLAYER_LEVELUP
+  # 失败时的音效
+  fail_sound: BLOCK_GLASS_BREAK
+  # 是否开启粒子效果
+  enable_particles: true
+  # 血量缩放设置 (防止血条刷屏)
+  # 如果开启，无论玩家有多少血量，客户端显示的血条都不会超过两排 (40.0 代表 20 颗心)
+  health_scaling:
+    enable: true
+    scale: 20.0
+  # 数据库备份设置
+  database_backup:
+    # 是否启用自动备份
+    enabled: true
+    # 备份间隔（小时）
+    backup_interval_hours: 24
+    # 保留的备份文件数量
+    max_backups: 7
+    # 备份文件保存路径（相对于插件数据文件夹）
+    backup_folder: "backups"
+
+# 世界屏蔽集成设置
+world_integration:
+  # 是否启用世界屏蔽功能
+  enabled: true
+  # 要屏蔽蟠桃血量加成的世界名称列表
+  disabled_worlds:
+    - "world_pvp"
+    - "world_arena"
+  # 进入屏蔽世界时是否回满血
+  restore_full_health_on_enter: true
+  # 进入屏蔽世界后延迟多少tick再回满血（20 ticks = 1秒）
+  restore_health_delay_ticks: 60
+  # 离开屏蔽世界时是否回满血
+  restore_full_health_on_exit: true
+
+# 世界最大生命值设置
+world_max_health:
+  # 是否启用世界最大生命值功能
+  enabled: true
+  # 各个世界的最大生命值设置（基础生命值）
+  worlds:
+    pvp: 500.0
+
+peaches:
+  peach_1:
+    display_name: "&6蟠桃"
+    material: APPLE
+    lore:
+      - "&7一颗神奇的蟠桃"
+      - "&e有 10% 概率增加 0.5 点生命上限"
+    health_bonus: 0.5
+    chance: 0.1
+    custom_model_data: 0
+  peach_2:
+    display_name: "&d优质蟠桃"
+    material: CHORUS_FRUIT
+    lore:
+      - "&7极其罕见的仙桃"
+      - "&e有 50% 概率增加 1 点生命上限"
+    health_bonus: 1.0
+    chance: 0.5
+    custom_model_data: 1
+  peach_3:
+    display_name: "&6极品蟠桃"
+    material: GOLDEN_APPLE
+    lore:
+      - "&7一颗神奇的蟠桃"
+      - "&e有 100% 概率增加 0.5 点生命上限"
+    health_bonus: 0.5
+    chance: 1.0
+    custom_model_data: 2
+  peach_4:
+    display_name: "&6至尊蟠桃"
+    material: GOLDEN_APPLE
+    lore:
+      - "&7至尊蟠桃"
+      - "&e有 100% 概率增加 1 点生命上限"
+    health_bonus: 1.0
+    chance: 1.0
+    custom_model_data: 3
