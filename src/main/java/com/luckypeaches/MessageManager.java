@@ -14,6 +14,7 @@ public class MessageManager {
     private final LuckyPeaches plugin;
     private File messagesFile;
     private FileConfiguration messagesConfig;
+    private boolean showPrefix = true;
 
     public MessageManager(LuckyPeaches plugin) {
         this.plugin = plugin;
@@ -26,11 +27,13 @@ public class MessageManager {
             plugin.saveResource("messages.yml", false);
         }
         messagesConfig = YamlConfiguration.loadConfiguration(messagesFile);
+        showPrefix = messagesConfig.getBoolean("show_prefix", true);
     }
 
     public void reloadMessages() {
         messagesFile = new File(plugin.getDataFolder(), "messages.yml");
         messagesConfig = YamlConfiguration.loadConfiguration(messagesFile);
+        showPrefix = messagesConfig.getBoolean("show_prefix", true);
     }
 
     public String getMessage(String key) {
@@ -57,12 +60,16 @@ public class MessageManager {
         return ChatColor.translateAlternateColorCodes('&', getMessage(key, defaultValue));
     }
 
+    public boolean isShowPrefix() {
+        return showPrefix;
+    }
+
     public String getPrefixedMessage(String key) {
-        return getPrefix() + getColoredMessage(key);
+        return (showPrefix ? getPrefix() : "") + getColoredMessage(key);
     }
 
     public String getPrefixedMessage(String key, String defaultValue) {
-        return getPrefix() + getColoredMessage(key, defaultValue);
+        return (showPrefix ? getPrefix() : "") + getColoredMessage(key, defaultValue);
     }
 
     public void sendMessage(CommandSender sender, String key) {
@@ -70,7 +77,7 @@ public class MessageManager {
     }
 
     public void sendMessage(CommandSender sender, String key, String defaultValue) {
-        sender.sendMessage(getPrefix() + getColoredMessage(key, defaultValue));
+        sender.sendMessage((showPrefix ? getPrefix() : "") + getColoredMessage(key, defaultValue));
     }
 
     public void sendMessageWithoutPrefix(CommandSender sender, String key) {
@@ -84,7 +91,7 @@ public class MessageManager {
                 message = message.replace(replacements[i], replacements[i + 1]);
             }
         }
-        sender.sendMessage(getPrefix() + ChatColor.translateAlternateColorCodes('&', message));
+        sender.sendMessage((showPrefix ? getPrefix() : "") + ChatColor.translateAlternateColorCodes('&', message));
     }
 
     public String getReplacedMessage(String key, String... replacements) {
@@ -98,7 +105,7 @@ public class MessageManager {
     }
 
     public String getPrefixedReplacedMessage(String key, String... replacements) {
-        return getPrefix() + getReplacedMessage(key, replacements);
+        return (showPrefix ? getPrefix() : "") + getReplacedMessage(key, replacements);
     }
 
     public void sendHelpMessage(CommandSender sender) {

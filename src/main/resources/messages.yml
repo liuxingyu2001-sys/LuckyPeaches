@@ -1,6 +1,8 @@
+# 是否显示消息前缀（如 [幸运蟠桃]）
+show_prefix: true
 prefix: "&e[幸运蟠桃] "
-success: "&a你吃下了 %peach%&a，感觉生命力涌现！（蟠桃血量 +%bonus%）&a当前蟠桃血量: &e%peach_health%"
-fail: "&c你吃下了 %peach%&c，但似乎什么也没发生... &7当前蟠桃血量: &e%peach_health%"
+success: "&a蟠桃血量 &e+%bonus% &7| &a当前蟠桃血量: &e%peach_health%"
+fail: "&c什么也没发生... &7当前蟠桃血量: &e%peach_health%"
 no_permission: "&c你没有权限执行此操作。"
 give_success: "&a已将 %peach% x%amount% 发送给 %player%"
 give_dropped: "&e背包已满，%amount% 个 %peach% &e已掉落在地上"
@@ -26,7 +28,6 @@ world_max_health_not_set: "&c世界 &e%world% &c未设置最大生命值"
 world_max_health_list: "&6当前设置最大生命值的世界列表:"
 world_max_health_list_item: "&7- &e%world%&7: &a%health%"
 world_max_health_not_enabled: "&c世界最大生命值功能未启用"
-total_health: "&f你的蟠桃血量现在是: &a%.1f"
 help:
   - "&6&l--- 幸运蟠桃 帮助菜单 ---"
   - "&e/lp give <玩家> <ID> [数量] &7- 给玩家发放蟠桃"

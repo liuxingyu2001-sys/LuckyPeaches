@@ -220,7 +220,12 @@ public class PeachListener implements Listener {
         if (item == null) return;
         
         PeachManager.PeachConfig config = plugin.getPeachManager().getPeachFromItem(item);
-        if (config == null) return;
+        if (config == null) {
+            if (plugin.isDebug()) {
+                plugin.getLogger().info("[PeachListener] 未识别为蟠桃: " + item.getType());
+            }
+            return;
+        }
 
         Player player = event.getPlayer();
 
@@ -307,7 +312,7 @@ public class PeachListener implements Listener {
                         // 粒子效果
                         if (plugin.getConfig().getBoolean("settings.enable_particles", true)) {
                             player.spawnParticle(Particle.HEART, player.getLocation().add(0, 1, 0), 15, 0.5, 0.5, 0.5, 0.1);
-                            player.spawnParticle(Particle.VILLAGER_HAPPY, player.getLocation().add(0, 1, 0), 10, 0.5, 0.5, 0.5, 0.1);
+                            player.spawnParticle(Particle.HAPPY_VILLAGER, player.getLocation().add(0, 1, 0), 10, 0.5, 0.5, 0.5, 0.1);
                         }
                         
                         // 成功音效
@@ -322,16 +327,8 @@ public class PeachListener implements Listener {
                         String formattedBonus = String.format("%.1f", config.healthBonus);
                         String formattedPeachHealth = String.format("%.1f", newPeachBonus);
                         player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("success",
-                            "%peach%", config.displayName,
                             "%bonus%", formattedBonus,
                             "%peach_health%", formattedPeachHealth));
-                        
-                        if (attr != null) {
-                            String totalHealthMsg = plugin.getMessageManager().getMessage("total_health");
-                            if (!totalHealthMsg.isEmpty()) {
-                                player.sendMessage(ChatColor.translateAlternateColorCodes('&', String.format(totalHealthMsg, newPeachBonus)));
-                            }
-                        }
                     }
                 });
             });
@@ -356,7 +353,6 @@ public class PeachListener implements Listener {
             }
             String formattedPeachHealth = String.format("%.1f", currentPeachBonus);
             player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("fail",
-                "%peach%", config.displayName,
                 "%peach_health%", formattedPeachHealth));
         }
     }
