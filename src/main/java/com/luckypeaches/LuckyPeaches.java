@@ -142,6 +142,10 @@ public class LuckyPeaches extends JavaPlugin {
         boolean healthScalingEnabled = getConfig().getBoolean("settings.health_scaling.enable", true);
         if (healthScalingEnabled) {
             double scale = getConfig().getDouble("settings.health_scaling.scale", 40.0);
+            // 防止 scale ≤ 0 导致客户端血条渲染异常（假死）
+            if (scale <= 0) {
+                scale = 20.0;
+            }
             player.setHealthScaled(true);
             player.setHealthScale(scale);
         }

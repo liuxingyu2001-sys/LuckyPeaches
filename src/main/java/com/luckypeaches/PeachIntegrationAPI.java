@@ -23,15 +23,18 @@ public class PeachIntegrationAPI {
             return;
         }
         
-        plugin.getServer().getScheduler().runTask(plugin, () -> {
-            org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
-            if (attr != null) {
-                attr.getModifiers().stream()
-                    .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
-                    .forEach(attr::removeModifier);
-                plugin.updateHealthScale(player);
-            }
-        });
+        // 直接同步执行，避免延迟一 tick 导致调用方拿到过期状态
+        org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+        if (attr != null) {
+            double healthBefore = player.getHealth();
+            attr.getModifiers().stream()
+                .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
+                .forEach(attr::removeModifier);
+            plugin.updateHealthScale(player);
+            // 同步血量到新上限，防止血量断崖触发客户端假死
+            double newMax = attr.getValue();
+            player.setHealth(Math.min(healthBefore, newMax));
+        }
     }
     
     /**

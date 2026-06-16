@@ -26,6 +26,7 @@ public class PeachListener implements Listener {
     private static final Set<UUID> playersInDisabledWorld = new HashSet<>();
     private static final java.util.Map<UUID, String> playersMaxHealthWorld = new java.util.HashMap<>();
     private static final java.util.Map<UUID, Long> lastDeathTime = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Set<UUID> eatingPlayers = new HashSet<>();
     
     public PeachListener(LuckyPeaches plugin) {
         this.plugin = plugin;
@@ -263,6 +264,12 @@ public class PeachListener implements Listener {
             return;
         }
 
+        // 防止异步间隙重复吃桃绕过上限检查
+        UUID playerId = player.getUniqueId();
+        if (eatingPlayers.contains(playerId)) {
+            return;
+        }
+
         // 消耗一个物品
         if (item.getAmount() > 1) {
             item.setAmount(item.getAmount() - 1);
@@ -277,6 +284,7 @@ public class PeachListener implements Listener {
 
         // 判定概率
         if (random.nextDouble() <= config.chance) {
+            eatingPlayers.add(playerId);
             // 异步读取数据库中的peach_bonus
             plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
                 DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(player.getUniqueId());
@@ -329,6 +337,7 @@ public class PeachListener implements Listener {
                         player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("success",
                             "%bonus%", formattedBonus,
                             "%peach_health%", formattedPeachHealth));
+                        eatingPlayers.remove(playerId);
                     }
                 });
             });
@@ -354,6 +363,7 @@ public class PeachListener implements Listener {
             String formattedPeachHealth = String.format("%.1f", currentPeachBonus);
             player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("fail",
                 "%peach_health%", formattedPeachHealth));
+            eatingPlayers.remove(playerId);
         }
     }
 
@@ -490,19 +500,19 @@ public class PeachListener implements Listener {
 
         org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
         if (attr != null) {
+            double healthBefore = player.getHealth();
             // 先移除蟠桃血量加成
             attr.getModifiers().stream()
                 .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
                 .forEach(attr::removeModifier);
             plugin.updateHealthScale(player);
             
-            // 延迟给玩家回满血
+            // 立即同步血量到新上限，防止血量断崖触发客户端假死
+            double newMax = attr.getValue();
             if (plugin.getConfig().getBoolean("world_integration.restore_full_health_on_enter", false)) {
-                long delayTicks = plugin.getConfig().getLong("world_integration.restore_health_delay_ticks", 60L);
-                plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-                    double maxHealth = attr.getValue();
-                    player.setHealth(maxHealth);
-                }, delayTicks);
+                player.setHealth(newMax);
+            } else {
+                player.setHealth(Math.min(healthBefore, newMax));
             }
         }
 
