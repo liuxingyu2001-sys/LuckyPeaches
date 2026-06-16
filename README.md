@@ -80,6 +80,25 @@ Minecraft 幸运蟠桃插件 — 食用蟠桃可永久提升最大生命值，�
 - **`world_max_health`** — 按世界的最大生命值
 - **`peaches`** — 蟠桃定义（`display_name`、`material`、`lore`、`health_bonus`、`chance`、`custom_model_data`）
 
+## 消息配置
+
+`messages.yml` 可自定义所有插件消息，支持颜色代码（`&`）。
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `show_prefix` | 是否显示 `[幸运蟠桃]` 前缀 | `true` |
+| `prefix` | 前缀内容 | `&e[幸运蟠桃] ` |
+| `success` | 吃桃成功消息（占位符: `%bonus%` `%peach_health%`） | 蟠桃血量 +X / 当前蟠桃血量: Y |
+| `fail` | 吃桃失败消息（占位符: `%peach_health%`） | 什么也没发生... |
+| `max_health_reached` | 已达上限消息 | 生命值已达巅峰... |
+| `death_penalty` | 死亡扣除消息 | 失去了 X 点蟠桃血量... |
+| `death_cooldown` | 死亡冷却消息 | 刚复活不久... |
+| `world_disabled` | 世界禁用消息 | 当前世界已屏蔽... |
+| `world_enter` / `world_exit` | 进入/离开屏蔽世界消息 | — |
+| 其他 | `give_success` `give_dropped` `get_health` 等 | — |
+
+设为 `show_prefix: false` 即可关闭所有消息的 `[幸运蟠桃]` 前缀。
+
 ## API
 
 供其他插件调用：
