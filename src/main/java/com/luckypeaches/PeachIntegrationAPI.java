@@ -73,7 +73,8 @@ public class PeachIntegrationAPI {
                         attr.addModifier(modifier);
                         plugin.updateHealthScale(player);
                         
-                        player.setHealth(attr.getValue());
+                        // 恢复基础血量 20，不放满血
+                        player.setHealth(20.0);
                     }
                 });
             }
