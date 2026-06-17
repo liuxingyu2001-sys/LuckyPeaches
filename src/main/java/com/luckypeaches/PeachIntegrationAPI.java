@@ -26,14 +26,14 @@ public class PeachIntegrationAPI {
         // 直接同步执行，避免延迟一 tick 导致调用方拿到过期状态
         org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
         if (attr != null) {
-            double healthBefore = player.getHealth();
+            // 移除蟠桃 modifier
             attr.getModifiers().stream()
                 .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
                 .forEach(attr::removeModifier);
+            // 重置基础血量为 20
+            attr.setBaseValue(20.0);
             plugin.updateHealthScale(player);
-            // 同步血量到新上限，防止血量断崖触发客户端假死
-            double newMax = attr.getValue();
-            player.setHealth(Math.min(healthBefore, newMax));
+            player.setHealth(20.0);
         }
     }
     
@@ -64,6 +64,9 @@ public class PeachIntegrationAPI {
                             .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
                             .forEach(attr::removeModifier);
                         
+                        // 重置基础血量为 20，再加蟠桃 modifier
+                        attr.setBaseValue(20.0);
+                        
                         org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
                             PEACH_MODIFIER_UUID,
                             "LuckyPeaches",
@@ -72,8 +75,6 @@ public class PeachIntegrationAPI {
                         );
                         attr.addModifier(modifier);
                         plugin.updateHealthScale(player);
-                        
-                        // 恢复基础血量 20，不放满血
                         player.setHealth(20.0);
                     }
                 });
