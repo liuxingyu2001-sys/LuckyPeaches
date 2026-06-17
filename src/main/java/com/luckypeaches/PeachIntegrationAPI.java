@@ -76,7 +76,7 @@ public class PeachIntegrationAPI {
                         );
                         attr.addModifier(modifier);
                         plugin.updateHealthScale(player);
-                        player.setHealth(20.0);
+                        player.setHealth(attr.getValue());
                     }
                 }, delayTicks);
             }
