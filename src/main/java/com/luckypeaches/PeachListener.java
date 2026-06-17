@@ -561,7 +561,6 @@ public class PeachListener implements Listener {
             }
         });
 
-        player.sendMessage(plugin.getMessageManager().getColoredMessage("world_exit"));
     }
 
     /**
