@@ -57,7 +57,8 @@ public class PeachIntegrationAPI {
             double peachBonus = healthData.getPeachBonus();
             
             if (peachBonus > 0) {
-                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                long delayTicks = plugin.getConfig().getLong("world_integration.restore_health_delay_ticks", 60L);
+                plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
                     org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
                     if (attr != null) {
                         attr.getModifiers().stream()
@@ -77,7 +78,7 @@ public class PeachIntegrationAPI {
                         plugin.updateHealthScale(player);
                         player.setHealth(20.0);
                     }
-                });
+                }, delayTicks);
             }
         });
     }
