@@ -68,6 +68,9 @@ world_integration:
   restore_full_health_on_enter: true
   # 进入屏蔽世界后延迟多少tick再回满血（20 ticks = 1秒）
   restore_health_delay_ticks: 60
+  # API 恢复蟠桃加成延迟多少tick（setPlayerNotInBattle）
+  # 用于战斗结束后恢复蟠桃血量，0 = 立即恢复
+  peach_restore_delay_ticks: 60
   # 离开屏蔽世界时是否回满血
   restore_full_health_on_exit: true
 

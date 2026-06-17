@@ -57,7 +57,7 @@ public class PeachIntegrationAPI {
             double peachBonus = healthData.getPeachBonus();
             
             if (peachBonus > 0) {
-                long delayTicks = plugin.getConfig().getLong("world_integration.restore_health_delay_ticks", 60L);
+                long delayTicks = plugin.getConfig().getLong("world_integration.peach_restore_delay_ticks", 60L);
                 plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
                     org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
                     if (attr != null) {
