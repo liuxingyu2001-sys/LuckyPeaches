@@ -516,7 +516,6 @@ public class PeachListener implements Listener {
             }
         }
 
-        player.sendMessage(plugin.getMessageManager().getColoredMessage("world_enter"));
     }
 
     /**
@@ -610,10 +609,6 @@ public class PeachListener implements Listener {
                     attr.addModifier(modifier);
                 }
                 plugin.updateHealthScale(player);
-                
-                player.sendMessage(plugin.getMessageManager().getReplacedMessage("world_max_health_applied",
-                    "%world%", worldName,
-                    "%health%", String.valueOf(maxHealth)));
             }
         } else {
             UUID playerUuid = player.getUniqueId();
