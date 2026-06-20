@@ -15,6 +15,8 @@ settings:
     health_threshold: 200.0
     # 死亡冷却时间（毫秒），在此时间内再次死亡不扣除蟠桃血（默认10000毫秒=10秒）
     death_cooldown_ms: 5000
+    # 死亡惩罚后恢复蟠桃 modifier 的延迟 tick 数（默认 2，防止重生瞬间 modifier 异常）
+    restore_delay_ticks: 2
     # 基于权限的惩罚配置（需要权限: luckypeaches.deathpenalty.<key>）
     # 玩家拥有多个权限时，取惩罚最少的配置
     # 如果没有任何权限，使用default配置

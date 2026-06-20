@@ -431,7 +431,8 @@ public class PeachListener implements Listener {
             
             plugin.getDatabaseManager().savePlayerData(playerId, player.getName(), newPeachBonus, 0);
             
-            plugin.getServer().getScheduler().runTask(plugin, () -> {
+            long restoreDelay = plugin.getConfig().getLong("settings.death_penalty.restore_delay_ticks", 2L);
+            plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
                 AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
                 if (attr != null) {
                     attr.getModifiers().stream()
@@ -453,7 +454,7 @@ public class PeachListener implements Listener {
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
                         String.format(plugin.getMessageManager().getMessage("death_penalty"), finalPenalty, newPeachBonus)));
                 }
-            });
+            }, restoreDelay);
         });
     }
 
