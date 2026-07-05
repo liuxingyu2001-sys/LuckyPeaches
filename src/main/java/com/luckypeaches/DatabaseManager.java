@@ -7,6 +7,8 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 public class DatabaseManager {
@@ -141,6 +143,87 @@ public class DatabaseManager {
     // 兼容旧版本的loadPlayerData方法
     public double loadPlayerData(UUID uuid) {
         return loadCompletePlayerData(uuid).getPeachBonus();
+    }
+
+    // 排行榜数据类
+    public static class PlayerRankData {
+        private final String uuid;
+        private final String username;
+        private final double peachBonus;
+
+        public PlayerRankData(String uuid, String username, double peachBonus) {
+            this.uuid = uuid;
+            this.username = username;
+            this.peachBonus = peachBonus;
+        }
+
+        public String getUuid() { return uuid; }
+        public String getUsername() { return username; }
+        public double getPeachBonus() { return peachBonus; }
+    }
+
+    /**
+     * 获取蟠桃加成排行榜前N名玩家
+     */
+    public List<PlayerRankData> getTopPlayers(int limit) {
+        List<PlayerRankData> result = new ArrayList<>();
+        String sql = "SELECT uuid, username, peach_bonus FROM player_peach_health WHERE peach_bonus > 0 ORDER BY peach_bonus DESC LIMIT ?";
+
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setInt(1, limit);
+            ResultSet rs = pstmt.executeQuery();
+
+            while (rs.next()) {
+                result.add(new PlayerRankData(
+                    rs.getString("uuid"),
+                    rs.getString("username"),
+                    rs.getDouble("peach_bonus")
+                ));
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().severe("获取排行榜数据失败: " + e.getMessage());
+        }
+
+        return result;
+    }
+
+    /**
+     * 获取玩家在蟠桃排行榜中的排名（1-based）
+     */
+    public int getPlayerRank(UUID uuid) {
+        String sql = "SELECT COUNT(*) as rank FROM player_peach_health WHERE peach_bonus > 0 " +
+                     "AND peach_bonus > (SELECT COALESCE(peach_bonus, 0) FROM player_peach_health WHERE uuid = ?)";
+
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, uuid.toString());
+            ResultSet rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                return rs.getInt("rank") + 1;
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().severe("获取玩家排名失败: " + e.getMessage());
+        }
+
+        return -1;
+    }
+
+    /**
+     * 获取拥有蟠桃加成的玩家总数
+     */
+    public int getTotalPlayersWithPeachBonus() {
+        String sql = "SELECT COUNT(*) as total FROM player_peach_health WHERE peach_bonus > 0";
+
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (rs.next()) {
+                return rs.getInt("total");
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().severe("获取玩家总数失败: " + e.getMessage());
+        }
+
+        return 0;
     }
 
     public void close() {

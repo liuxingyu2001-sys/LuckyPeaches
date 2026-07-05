@@ -70,6 +70,40 @@ Minecraft 幸运蟠桃插件 — 食用蟠桃可永久提升最大生命值，�
 |------|------|------|
 | Spigot/Paper 1.13+ | ✅ | 运行环境 |
 | PlaceholderAPI | ❌ 可选 | 占位符扩展 |
+| CraftEngine | ❌ 可选 | 自定义物品模型 |
+
+## PlaceholderAPI 占位符
+
+安装 PlaceholderAPI 后自动注册，无需额外配置。前缀：`luckypeach`。
+
+### 玩家数据
+
+| 占位符 | 说明 |
+|--------|------|
+| `%luckypeach_peach_bonus%` | 蟠桃加成生命值（保留1位小数） |
+| `%luckypeach_peach_bonus_raw%` | 蟠桃加成生命值（原始值） |
+| `%luckypeach_total_health%` | 总最大生命值（基础 + 蟠桃 + 其他） |
+| `%luckypeach_current_health%` | 当前血量 |
+| `%luckypeach_base_health%` | 基础最大生命值 |
+| `%luckypeach_health_difference%` | 最大血量与当前血量的差值 |
+| `%luckypeach_max_health_limit%` | 当前玩家的最大血量上限 |
+| `%luckypeach_peach_bonus_percentage%` | 蟠桃加成占总血量百分比 |
+| `%luckypeach_is_in_disabled_world%` | 是否在屏蔽世界中（true/false） |
+| `%luckypeach_health_scale%` | 血条缩放比例 |
+
+### 排行榜
+
+| 占位符 | 说明 |
+|--------|------|
+| `%luckypeach_peach_rank%` | 蟠桃排行榜排名（#1, #2, ...） |
+| `%luckypeach_peach_rank_ordinal%` | 排名序数（第1名, 第2名, ...） |
+| `%luckypeach_peach_rank_percentage%` | 排名百分比（top 10%） |
+| `%luckypeach_peach_count%` | 拥有蟠桃加成的玩家总数 |
+| `%luckypeach_top_player_<1-10>%` | 排行榜第N名玩家名 |
+| `%luckypeach_top_bonus_<1-10>%` | 排行榜第N名蟠桃加成值 |
+| `%luckypeach_top_name_<1-10>%` | 排行榜第N名玩家名（别名） |
+
+排行榜占位符支持 1-10 名，例如 `%luckypeach_top_player_3%` 显示第3名玩家名，`%luckypeach_top_bonus_5%` 显示第5名的蟠桃加成值。
 
 ## 配置
 

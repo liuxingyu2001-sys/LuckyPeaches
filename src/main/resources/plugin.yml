@@ -3,6 +3,7 @@ author: liuxingyu2001
 version: ${project.version}
 main: com.luckypeaches.LuckyPeaches
 api-version: 1.13
+softdepend: [PlaceholderAPI]
 commands:
   luckypeach:
     aliases: [luckyp, lp]

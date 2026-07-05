@@ -50,7 +50,15 @@ public class LuckyPeaches extends JavaPlugin {
         this.peachManager.loadPeaches();
 
         getServer().getPluginManager().registerEvents(new PeachListener(this), this);
-        
+
+        // 注册 PlaceholderAPI 扩展
+        if (getServer().getPluginManager().getPlugin("PlaceholderAPI") != null) {
+            new PeachPlaceholder(this).register();
+            getLogger().info("已检测到 PlaceholderAPI，已注册占位符扩展。");
+        } else {
+            getLogger().info("未检测到 PlaceholderAPI，占位符功能不可用。");
+        }
+
         getLogger().info("LuckyPeaches 插件已启用！");
         pluginInitialized = true;
     }

@@ -17,6 +17,7 @@
     </properties>
 
     <build>
+        <finalName>Liu-${project.artifactId}-${project.version}</finalName>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -41,6 +42,10 @@
             <id>papermc</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
+        <repository>
+            <id>clip-repo</id>
+            <url>https://repo.extendedclip.com/content/repositories/placeholderapi/</url>
+        </repository>
     </repositories>
 
     <dependencies>
@@ -51,11 +56,17 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
+            <groupId>me.clip</groupId>
+            <artifactId>placeholderapi</artifactId>
+            <version>2.11.6</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
             <groupId>net.momirealms</groupId>
             <artifactId>craft-engine</artifactId>
-            <version>26.6.1</version>
+            <version>26.7</version>
             <scope>system</scope>
-            <systemPath>/home/mcser/plugins/craft-engine-paper-plugin-26.6.1.jar</systemPath>
+            <systemPath>/home/liu/1/craft-engine-paper-plugin-26.7.jar</systemPath>
         </dependency>
     </dependencies>
 </project>
