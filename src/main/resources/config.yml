@@ -52,7 +52,7 @@ settings:
     # 是否启用自动备份
     enabled: true
     # 备份间隔（小时）
-    backup_interval_hours: 24
+    backup_interval_hours: 1
     # 保留的备份文件数量
     max_backups: 7
     # 备份文件保存路径（相对于插件数据文件夹）

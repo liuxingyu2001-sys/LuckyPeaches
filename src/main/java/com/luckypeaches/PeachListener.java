@@ -122,7 +122,6 @@ public class PeachListener implements Listener {
             // 加载玩家的蟠桃额外生命值数据
             DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(playerId);
             double peachBonus = healthData.getPeachBonus();
-            double savedHealth = healthData.getCurrentHealth();
             
             // 在主线程中恢复玩家血量
             plugin.getServer().getScheduler().runTask(plugin, () -> {
@@ -142,27 +141,48 @@ public class PeachListener implements Listener {
                             "当前血量=" + originalHealth);
                     }
                     
-                    // 如果不在屏蔽世界中，应用蟠桃加成
+                    // 如果不在屏蔽世界中，确保蟠桃加成与数据库一致
                     if (!isInDisabledWorld) {
-                        // 使用AttributeModifier应用peach_bonus，不修改基础生命值
-                        final double finalPeachBonus = peachBonus;
-                        if (finalPeachBonus > 0) {
+                        // 读取玩家身上已有的蟠桃modifier值（由player.dat恢复）
+                        double currentModifierValue = 0;
+                        for (org.bukkit.attribute.AttributeModifier mod : maxHealthAttr.getModifiers()) {
+                            if (mod.getUniqueId().equals(PEACH_MODIFIER_UUID)) {
+                                currentModifierValue = mod.getAmount();
+                                break;
+                            }
+                        }
+                        
+                        // 仅在数据库值与当前modifier不一致时才更新（如离线被管理员修改）
+                        if (Math.abs(currentModifierValue - peachBonus) > 0.001) {
+                            if (plugin.isDebug()) {
+                                plugin.getLogger().info("玩家 " + player.getName() + " 蟠桃加成不一致: 当前=" 
+                                    + currentModifierValue + ", 数据库=" + peachBonus + "，执行更新");
+                            }
+                            
+                            // 在修改modifier前捕获当前血量，避免remove后血量被Minecraft截断
+                            double healthBeforeUpdate = player.getHealth();
+                            
                             // 移除旧的蟠桃AttributeModifier
                             maxHealthAttr.getModifiers().stream()
                                 .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
                                 .forEach(maxHealthAttr::removeModifier);
                             
-                            // 添加新的蟠桃AttributeModifier
-                            org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                                PEACH_MODIFIER_UUID,
-                                "LuckyPeaches",
-                                finalPeachBonus,
-                                org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
-                            );
-                            maxHealthAttr.addModifier(modifier);
+                            if (peachBonus > 0) {
+                                // 添加新的蟠桃AttributeModifier
+                                org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
+                                    PEACH_MODIFIER_UUID,
+                                    "LuckyPeaches",
+                                    peachBonus,
+                                    org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
+                                );
+                                maxHealthAttr.addModifier(modifier);
+                            }
                             
+                            // 恢复血量到新上限以内，避免modifier变更导致血量断崖
+                            player.setHealth(Math.min(healthBeforeUpdate, maxHealthAttr.getValue()));
+                        } else {
                             if (plugin.isDebug()) {
-                                plugin.getLogger().info("玩家 " + player.getName() + " 应用蟠桃加成: " + finalPeachBonus);
+                                plugin.getLogger().info("玩家 " + player.getName() + " 蟠桃加成一致(" + peachBonus + ")，跳过更新");
                             }
                         }
                     } else {
@@ -171,18 +191,6 @@ public class PeachListener implements Listener {
                         }
                     }
                     
-                    // 恢复血量
-                    if (savedHealth > 0) {
-                        double maxHealth = maxHealthAttr.getValue();
-                        double finalSavedHealth = savedHealth;
-                        if (finalSavedHealth > maxHealth) {
-                            finalSavedHealth = maxHealth;
-                        }
-                        player.setHealth(finalSavedHealth);
-                        if (plugin.isDebug()) {
-                            plugin.getLogger().info("玩家 " + player.getName() + " 恢复血量: " + finalSavedHealth);
-                        }
-                    }
                     
                     // 更新血条显示
                     plugin.updateHealthScale(player);
@@ -313,6 +321,10 @@ public class PeachListener implements Listener {
                             org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
                         );
                         attr.addModifier(modifier);
+                        
+                        // 同步增加当前血量，避免满血玩家吃完蟠桃后因最大血量变大而"不满血"触发受伤动画
+                        double newCurrentHealth = Math.min(player.getHealth() + config.healthBonus, attr.getValue());
+                        player.setHealth(newCurrentHealth);
                         
                         // 更新缩放
                         plugin.updateHealthScale(player);
