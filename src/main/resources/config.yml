@@ -85,6 +85,15 @@ world_max_health:
     pvp: 500.0
 
 peaches:
+  # 蟠桃配置说明：
+  #   display_name      - 物品显示名称（支持颜色代码 &）
+  #   material          - 物品材质（Bukkit Material 枚举值）
+  #   lore              - 物品描述（支持颜色代码 &）
+  #   health_bonus      - 成功时增加的生命值
+  #   chance            - 成功概率（0.0-1.0，1.0=100%）
+  #   custom_model_data - CustomModelData 值（用于资源包模型，设为 0 表示不使用）
+  #   craftengine_model - CraftEngine 模型ID（如使用CE模型，则 display_name/lore/custom_model_data 会被忽略）
+  # 注：custom_model_data 和 craftengine_model 二选一即可，同时设置时优先使用 craftengine_model
   peach_1:
     display_name: "&6蟠桃"
     material: APPLE
@@ -121,3 +130,14 @@ peaches:
     health_bonus: 1.0
     chance: 1.0
     custom_model_data: 3
+  # CraftEngine 模型示例（需要安装 CraftEngine 插件并在其配置中定义模型）
+  peach_5:
+    display_name: "&d仙桃"
+    material: APPLE
+    lore:
+      - "&7使用 CraftEngine 模型的仙桃"
+      - "&e有 100% 概率增加 2 点生命上限"
+    health_bonus: 2.0
+    chance: 1.0
+    custom_model_data: 0
+    craftengine_model: "your_model_id_here"  # 替换为实际的 CraftEngine 模型ID
