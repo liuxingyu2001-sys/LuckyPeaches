@@ -3,6 +3,7 @@ package com.luckypeaches;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.bukkit.Bukkit;
@@ -113,11 +114,16 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        double peachBonus = plugin.getDatabaseManager().loadPlayerData(target.getUniqueId());
-        
-        sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("get_health",
-            "%player%", target.getName(),
-            "%health%", String.format("%.1f", peachBonus)));
+        final UUID targetId = target.getUniqueId();
+        final String targetName = target.getName();
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            double peachBonus = plugin.getDatabaseManager().loadPlayerData(targetId);
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("get_health",
+                    "%player%", targetName,
+                    "%health%", String.format("%.1f", peachBonus)));
+            });
+        });
     }
 
     private void handleSetHealth(CommandSender sender, String[] args) {
@@ -141,42 +147,45 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        // 异步更新数据库，保存当前血量
-        double currentHealth = target.getHealth();
+        final UUID targetId = target.getUniqueId();
+        final String targetName = target.getName();
+        final double currentHealth = target.getHealth();
+        final double finalNewBonus = newBonus;
+
+        // 先异步保存数据库，成功后再在主线程应用modifier
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-            plugin.getDatabaseManager().savePlayerData(target.getUniqueId(), target.getName(), newBonus, currentHealth);
+            plugin.getDatabaseManager().savePlayerData(targetId, targetName, finalNewBonus, currentHealth);
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                Player onlineTarget = Bukkit.getPlayer(targetId);
+                if (onlineTarget == null || !onlineTarget.isOnline()) return;
+
+                AttributeInstance maxHealthAttr = onlineTarget.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+                if (maxHealthAttr != null) {
+                    maxHealthAttr.getModifiers().stream()
+                        .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
+                        .forEach(maxHealthAttr::removeModifier);
+
+                    org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
+                        PEACH_MODIFIER_UUID,
+                        "LuckyPeaches",
+                        finalNewBonus,
+                        org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
+                    );
+                    maxHealthAttr.addModifier(modifier);
+
+                    double newHealth = maxHealthAttr.getValue();
+                    if (currentHealth > newHealth) {
+                        onlineTarget.setHealth(newHealth);
+                    }
+                }
+
+                plugin.updateHealthScale(onlineTarget);
+
+                sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("set_health_success",
+                    "%player%", targetName,
+                    "%health%", String.format("%.1f", finalNewBonus)));
+            });
         });
-        
-        // 更新属性
-        AttributeInstance maxHealthAttr = target.getAttribute(Attribute.GENERIC_MAX_HEALTH);
-        if (maxHealthAttr != null) {
-            // 移除旧的蟠桃AttributeModifier
-            maxHealthAttr.getModifiers().stream()
-                .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
-                .forEach(maxHealthAttr::removeModifier);
-            
-            // 添加新的蟠桃AttributeModifier
-            org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                PEACH_MODIFIER_UUID,
-                "LuckyPeaches",
-                newBonus,
-                org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
-            );
-            maxHealthAttr.addModifier(modifier);
-            
-            // 使用之前定义的currentHealth变量
-            double newHealth = maxHealthAttr.getValue(); // 新的总血量
-            if (currentHealth > newHealth) {
-                target.setHealth(newHealth);
-            }
-        }
-
-        // 更新缩放
-        plugin.updateHealthScale(target);
-
-        sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("set_health_success",
-            "%player%", target.getName(),
-            "%health%", String.format("%.1f", newBonus)));
     }
 
     private void handleGive(CommandSender sender, String[] args) {
@@ -218,12 +227,12 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("give_dropped",
                 "%peach%", peach.getItemMeta().getDisplayName(),
                 "%amount%", String.valueOf(leftover.values().stream().mapToInt(ItemStack::getAmount).sum())));
+        } else {
+            sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("give_success",
+                "%peach%", peach.getItemMeta().getDisplayName(),
+                "%amount%", String.valueOf(amount),
+                "%player%", target.getName()));
         }
-        
-        sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("give_success",
-            "%peach%", peach.getItemMeta().getDisplayName(),
-            "%amount%", String.valueOf(amount),
-            "%player%", target.getName()));
     }
 
     private void handleBackup(CommandSender sender, String[] args) {
@@ -416,21 +425,22 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        java.util.Map<String, Object> worldsMap = plugin.getConfig().getConfigurationSection("world_max_health.worlds").getValues(false);
-        
-        if (worldsMap.isEmpty()) {
+        org.bukkit.configuration.ConfigurationSection section = plugin.getConfig().getConfigurationSection("world_max_health.worlds");
+        if (section == null || section.getKeys(false).isEmpty()) {
             sender.sendMessage(ChatColor.YELLOW + "当前没有设置任何世界的最大生命值。");
-        } else {
-            sender.sendMessage(plugin.getMessageManager().getPrefixedMessage("world_max_health_list"));
-            
-            for (java.util.Map.Entry<String, Object> entry : worldsMap.entrySet()) {
-                String world = entry.getKey();
-                double health = (double) entry.getValue();
-                sender.sendMessage(plugin.getMessageManager().getReplacedMessage("world_max_health_list_item",
+            return;
+        }
+        java.util.Map<String, Object> worldsMap = section.getValues(false);
+
+        sender.sendMessage(plugin.getMessageManager().getPrefixedMessage("world_max_health_list"));
+
+        for (java.util.Map.Entry<String, Object> entry : worldsMap.entrySet()) {
+            String world = entry.getKey();
+            double health = ((Number) entry.getValue()).doubleValue();
+            sender.sendMessage(plugin.getMessageManager().getReplacedMessage("world_max_health_list_item",
                     "%world%", world,
                     "%health%", String.valueOf(health)));
             }
-        }
     }
 
     private void handleWorldRemoveMax(CommandSender sender, String worldName) {

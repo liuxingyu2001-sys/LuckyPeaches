@@ -26,14 +26,12 @@ public class PeachIntegrationAPI {
         // 直接同步执行，避免延迟一 tick 导致调用方拿到过期状态
         org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
         if (attr != null) {
-            // 移除蟠桃 modifier
+            // 仅移除蟠桃 modifier，不重置基础血量（避免覆盖其他插件的基础血量修改）
             attr.getModifiers().stream()
                 .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
                 .forEach(attr::removeModifier);
-            // 重置基础血量为 20
-            attr.setBaseValue(20.0);
             plugin.updateHealthScale(player);
-            player.setHealth(20.0);
+            player.setHealth(Math.min(player.getHealth(), attr.getValue()));
         }
     }
     
@@ -59,15 +57,14 @@ public class PeachIntegrationAPI {
             if (peachBonus > 0) {
                 long delayTicks = plugin.getConfig().getLong("world_integration.peach_restore_delay_ticks", 60L);
                 plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                    if (!player.isOnline()) return;
                     org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
                     if (attr != null) {
                         attr.getModifiers().stream()
                             .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
                             .forEach(attr::removeModifier);
                         
-                        // 重置基础血量为 20，再加蟠桃 modifier
-                        attr.setBaseValue(20.0);
-                        
+                        // 不重置基础血量，避免覆盖其他插件的修改
                         org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
                             PEACH_MODIFIER_UUID,
                             "LuckyPeaches",

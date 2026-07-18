@@ -1,10 +1,6 @@
 package com.luckypeaches;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.nio.channels.FileChannel;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -59,12 +55,6 @@ public class BackupManager {
      */
     public boolean backupDatabase() {
         File dataFolder = plugin.getDataFolder();
-        File dbFile = new File(dataFolder, "data.db");
-
-        if (!dbFile.exists()) {
-            plugin.getLogger().warning("数据库文件不存在，无法备份");
-            return false;
-        }
 
         File backupFolder = new File(dataFolder, plugin.getConfig().getString("settings.database_backup.backup_folder", "backups"));
         if (!backupFolder.exists()) {
@@ -76,30 +66,12 @@ public class BackupManager {
         String backupFileName = "backup_" + timestamp + ".db";
         File backupFile = new File(backupFolder, backupFileName);
 
-        try {
-            copyFile(dbFile, backupFile);
+        boolean success = plugin.getDatabaseManager().backupToFile(backupFile);
+        if (success) {
             plugin.getLogger().info("数据库备份成功: " + backupFileName);
-            
-            // 清理旧备份
             cleanupOldBackups(backupFolder);
-            
-            return true;
-        } catch (IOException e) {
-            plugin.getLogger().severe("数据库备份失败: " + e.getMessage());
-            return false;
         }
-    }
-
-    /**
-     * 复制文件
-     */
-    private void copyFile(File source, File destination) throws IOException {
-        try (FileInputStream fis = new FileInputStream(source);
-             FileOutputStream fos = new FileOutputStream(destination);
-             FileChannel sourceChannel = fis.getChannel();
-             FileChannel destChannel = fos.getChannel()) {
-            destChannel.transferFrom(sourceChannel, 0, sourceChannel.size());
-        }
+        return success;
     }
 
     /**

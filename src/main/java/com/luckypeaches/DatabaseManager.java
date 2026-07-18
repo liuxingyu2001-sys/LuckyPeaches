@@ -32,6 +32,7 @@ public class DatabaseManager {
     }
     private final LuckyPeaches plugin;
     private Connection connection;
+    private final Object dbLock = new Object();
 
     public DatabaseManager(LuckyPeaches plugin) {
         this.plugin = plugin;
@@ -98,18 +99,20 @@ public class DatabaseManager {
     }
 
     public void savePlayerData(UUID uuid, String username, double peachBonus, double currentHealth) {
-        String sql = "INSERT OR REPLACE INTO player_peach_health " +
-                "(uuid, username, peach_bonus, current_health, last_updated) " +
-                "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)";
+        synchronized (dbLock) {
+            String sql = "INSERT OR REPLACE INTO player_peach_health " +
+                    "(uuid, username, peach_bonus, current_health, last_updated) " +
+                    "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)";
 
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, uuid.toString());
-            pstmt.setString(2, username);
-            pstmt.setDouble(3, peachBonus);
-            pstmt.setDouble(4, currentHealth);
-            pstmt.executeUpdate();
-        } catch (SQLException e) {
-            plugin.getLogger().severe("保存玩家数据失败: " + e.getMessage());
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, uuid.toString());
+                pstmt.setString(2, username);
+                pstmt.setDouble(3, peachBonus);
+                pstmt.setDouble(4, currentHealth);
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("保存玩家数据失败: " + e.getMessage());
+            }
         }
     }
     
@@ -122,22 +125,24 @@ public class DatabaseManager {
 
     // 加载完整的玩家健康数据
     public PlayerHealthData loadCompletePlayerData(UUID uuid) {
-        String sql = "SELECT peach_bonus, current_health FROM player_peach_health WHERE uuid = ?";
+        synchronized (dbLock) {
+            String sql = "SELECT peach_bonus, current_health FROM player_peach_health WHERE uuid = ?";
 
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, uuid.toString());
-            ResultSet rs = pstmt.executeQuery();
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, uuid.toString());
+                ResultSet rs = pstmt.executeQuery();
 
-            if (rs.next()) {
-                double peachBonus = rs.getDouble("peach_bonus");
-                double currentHealth = rs.getDouble("current_health");
-                return new PlayerHealthData(peachBonus, currentHealth);
+                if (rs.next()) {
+                    double peachBonus = rs.getDouble("peach_bonus");
+                    double currentHealth = rs.getDouble("current_health");
+                    return new PlayerHealthData(peachBonus, currentHealth);
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("加载玩家数据失败: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            plugin.getLogger().severe("加载玩家数据失败: " + e.getMessage());
-        }
 
-        return new PlayerHealthData(0.0, 0.0);
+            return new PlayerHealthData(0.0, 0.0);
+        }
     }
     
     // 兼容旧版本的loadPlayerData方法
@@ -166,64 +171,87 @@ public class DatabaseManager {
      * 获取蟠桃加成排行榜前N名玩家
      */
     public List<PlayerRankData> getTopPlayers(int limit) {
-        List<PlayerRankData> result = new ArrayList<>();
-        String sql = "SELECT uuid, username, peach_bonus FROM player_peach_health WHERE peach_bonus > 0 ORDER BY peach_bonus DESC LIMIT ?";
+        synchronized (dbLock) {
+            List<PlayerRankData> result = new ArrayList<>();
+            String sql = "SELECT uuid, username, peach_bonus FROM player_peach_health WHERE peach_bonus > 0 ORDER BY peach_bonus DESC LIMIT ?";
 
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setInt(1, limit);
-            ResultSet rs = pstmt.executeQuery();
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setInt(1, limit);
+                ResultSet rs = pstmt.executeQuery();
 
-            while (rs.next()) {
-                result.add(new PlayerRankData(
-                    rs.getString("uuid"),
-                    rs.getString("username"),
-                    rs.getDouble("peach_bonus")
-                ));
+                while (rs.next()) {
+                    result.add(new PlayerRankData(
+                        rs.getString("uuid"),
+                        rs.getString("username"),
+                        rs.getDouble("peach_bonus")
+                    ));
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("获取排行榜数据失败: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            plugin.getLogger().severe("获取排行榜数据失败: " + e.getMessage());
-        }
 
-        return result;
+            return result;
+        }
     }
 
     /**
      * 获取玩家在蟠桃排行榜中的排名（1-based）
      */
     public int getPlayerRank(UUID uuid) {
-        String sql = "SELECT COUNT(*) as rank FROM player_peach_health WHERE peach_bonus > 0 " +
-                     "AND peach_bonus > (SELECT COALESCE(peach_bonus, 0) FROM player_peach_health WHERE uuid = ?)";
+        synchronized (dbLock) {
+            String sql = "SELECT COUNT(*) as rank FROM player_peach_health WHERE peach_bonus > 0 " +
+                         "AND peach_bonus > (SELECT COALESCE(peach_bonus, 0) FROM player_peach_health WHERE uuid = ?)";
 
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, uuid.toString());
-            ResultSet rs = pstmt.executeQuery();
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, uuid.toString());
+                ResultSet rs = pstmt.executeQuery();
 
-            if (rs.next()) {
-                return rs.getInt("rank") + 1;
+                if (rs.next()) {
+                    return rs.getInt("rank") + 1;
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("获取玩家排名失败: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            plugin.getLogger().severe("获取玩家排名失败: " + e.getMessage());
-        }
 
-        return -1;
+            return -1;
+        }
     }
 
     /**
      * 获取拥有蟠桃加成的玩家总数
      */
     public int getTotalPlayersWithPeachBonus() {
-        String sql = "SELECT COUNT(*) as total FROM player_peach_health WHERE peach_bonus > 0";
+        synchronized (dbLock) {
+            String sql = "SELECT COUNT(*) as total FROM player_peach_health WHERE peach_bonus > 0";
 
-        try (Statement stmt = connection.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-            if (rs.next()) {
-                return rs.getInt("total");
+            try (Statement stmt = connection.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
+                if (rs.next()) {
+                    return rs.getInt("total");
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("获取玩家总数失败: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            plugin.getLogger().severe("获取玩家总数失败: " + e.getMessage());
-        }
 
-        return 0;
+            return 0;
+        }
+    }
+
+    /**
+     * 使用 VACUUM INTO 创建一致的数据库备份
+     * @param backupFile 备份目标文件
+     * @return 备份是否成功
+     */
+    public boolean backupToFile(File backupFile) {
+        synchronized (dbLock) {
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("VACUUM INTO '" + backupFile.getAbsolutePath() + "'");
+                return true;
+            } catch (SQLException e) {
+                plugin.getLogger().severe("数据库备份失败: " + e.getMessage());
+                return false;
+            }
+        }
     }
 
     public void close() {

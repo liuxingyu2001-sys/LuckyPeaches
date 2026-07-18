@@ -46,6 +46,10 @@
             <id>clip-repo</id>
             <url>https://repo.extendedclip.com/content/repositories/placeholderapi/</url>
         </repository>
+        <repository>
+            <id>momirealms-repo</id>
+            <url>https://repo.momirealms.net/releases/</url>
+        </repository>
     </repositories>
 
     <dependencies>
@@ -63,10 +67,15 @@
         </dependency>
         <dependency>
             <groupId>net.momirealms</groupId>
-            <artifactId>craft-engine</artifactId>
+            <artifactId>craft-engine-bukkit</artifactId>
             <version>26.7</version>
-            <scope>system</scope>
-            <systemPath>/home/liu/1/craft-engine-paper-plugin-26.7.jar</systemPath>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>net.momirealms</groupId>
+            <artifactId>craft-engine-core</artifactId>
+            <version>26.7</version>
+            <scope>provided</scope>
         </dependency>
     </dependencies>
 </project>

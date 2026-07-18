@@ -172,7 +172,7 @@ public class PeachPlaceholder extends PlaceholderExpansion {
         return String.format("%.1f%%", percentage);
     }
 
-    private List<DatabaseManager.PlayerRankData> getTopPlayersCached(DatabaseManager db) {
+    private synchronized List<DatabaseManager.PlayerRankData> getTopPlayersCached(DatabaseManager db) {
         long now = System.currentTimeMillis();
         if (now - cacheTime > CACHE_TTL_MS) {
             cachedTopPlayers = db.getTopPlayers(MAX_TOP_RANK);

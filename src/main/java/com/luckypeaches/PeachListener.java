@@ -27,6 +27,7 @@ public class PeachListener implements Listener {
     private static final java.util.Map<UUID, String> playersMaxHealthWorld = new java.util.HashMap<>();
     private static final java.util.Map<UUID, Long> lastDeathTime = new java.util.concurrent.ConcurrentHashMap<>();
     private static final Set<UUID> eatingPlayers = new HashSet<>();
+    private static final Set<UUID> pendingDeathPenalty = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
     
     public PeachListener(LuckyPeaches plugin) {
         this.plugin = plugin;
@@ -208,9 +209,15 @@ public class PeachListener implements Listener {
         
         playersInDisabledWorld.remove(playerId);
         playersMaxHealthWorld.remove(playerId);
+        eatingPlayers.remove(playerId);
+        lastDeathTime.remove(playerId);
         
         // 异步保存到数据库，延迟1秒执行以确保其他插件处理完成
         plugin.getServer().getScheduler().runTaskLaterAsynchronously(plugin, () -> {
+            // 如果死亡惩罚正在处理中，跳过保存以避免覆盖惩罚结果
+            if (pendingDeathPenalty.contains(playerId)) {
+                return;
+            }
             // 直接读取数据库中的peach_bonus，不重新计算
             // 这样可以避免被其他插件的基础生命值修改影响
             DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(playerId);
@@ -305,50 +312,53 @@ public class PeachListener implements Listener {
                 
                 // 在主线程中应用peach_bonus
                 plugin.getServer().getScheduler().runTask(plugin, () -> {
-                    // 使用AttributeModifier应用peach_bonus，不修改基础生命值
-                    AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
-                    if (attr != null) {
-                        // 移除旧的蟠桃AttributeModifier
-                        attr.getModifiers().stream()
-                            .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
-                            .forEach(attr::removeModifier);
-                        
-                        // 添加新的蟠桃AttributeModifier
-                        org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                            PEACH_MODIFIER_UUID,
-                            "LuckyPeaches",
-                            newPeachBonus,
-                            org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
-                        );
-                        attr.addModifier(modifier);
-                        
-                        // 同步增加当前血量，避免满血玩家吃完蟠桃后因最大血量变大而"不满血"触发受伤动画
-                        double newCurrentHealth = Math.min(player.getHealth() + config.healthBonus, attr.getValue());
-                        player.setHealth(newCurrentHealth);
-                        
-                        // 更新缩放
-                        plugin.updateHealthScale(player);
-                        
-                        // 粒子效果
-                        if (plugin.getConfig().getBoolean("settings.enable_particles", true)) {
-                            player.spawnParticle(Particle.HEART, player.getLocation().add(0, 1, 0), 15, 0.5, 0.5, 0.5, 0.1);
-                            player.spawnParticle(Particle.HAPPY_VILLAGER, player.getLocation().add(0, 1, 0), 10, 0.5, 0.5, 0.5, 0.1);
-                        }
-                        
-                        // 成功音效
-                        try {
-                            String soundName = plugin.getConfig().getString("settings.success_sound", "ENTITY_PLAYER_LEVELUP");
-                            Sound sound = Sound.valueOf(soundName);
-                            player.playSound(player.getLocation(), sound, 1.0f, 1.2f);
-                        } catch (IllegalArgumentException e) {
-                        }
+                    try {
+                        // 使用AttributeModifier应用peach_bonus，不修改基础生命值
+                        AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+                        if (attr != null && player.isOnline()) {
+                            // 移除旧的蟠桃AttributeModifier
+                            attr.getModifiers().stream()
+                                .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
+                                .forEach(attr::removeModifier);
 
-                        // 格式化健康值显示，保留一位小数
-                        String formattedBonus = String.format("%.1f", config.healthBonus);
-                        String formattedPeachHealth = String.format("%.1f", newPeachBonus);
-                        player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("success",
-                            "%bonus%", formattedBonus,
-                            "%peach_health%", formattedPeachHealth));
+                            // 添加新的蟠桃AttributeModifier
+                            org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
+                                PEACH_MODIFIER_UUID,
+                                "LuckyPeaches",
+                                newPeachBonus,
+                                org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
+                            );
+                            attr.addModifier(modifier);
+
+                            // 同步增加当前血量，避免满血玩家吃完蟠桃后因最大血量变大而"不满血"触发受伤动画
+                            double newCurrentHealth = Math.min(player.getHealth() + config.healthBonus, attr.getValue());
+                            player.setHealth(newCurrentHealth);
+
+                            // 更新缩放
+                            plugin.updateHealthScale(player);
+
+                            // 粒子效果
+                            if (plugin.getConfig().getBoolean("settings.enable_particles", true)) {
+                                player.spawnParticle(Particle.HEART, player.getLocation().add(0, 1, 0), 15, 0.5, 0.5, 0.5, 0.1);
+                                player.spawnParticle(Particle.HAPPY_VILLAGER, player.getLocation().add(0, 1, 0), 10, 0.5, 0.5, 0.5, 0.1);
+                            }
+
+                            // 成功音效
+                            try {
+                                String soundName = plugin.getConfig().getString("settings.success_sound", "ENTITY_PLAYER_LEVELUP");
+                                Sound sound = Sound.valueOf(soundName);
+                                player.playSound(player.getLocation(), sound, 1.0f, 1.2f);
+                            } catch (IllegalArgumentException e) {
+                            }
+
+                            // 格式化健康值显示，保留一位小数
+                            String formattedBonus = String.format("%.1f", config.healthBonus);
+                            String formattedPeachHealth = String.format("%.1f", newPeachBonus);
+                            player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("success",
+                                "%bonus%", formattedBonus,
+                                "%peach_health%", formattedPeachHealth));
+                        }
+                    } finally {
                         eatingPlayers.remove(playerId);
                     }
                 });
@@ -423,50 +433,58 @@ public class PeachListener implements Listener {
         double maxPenalty = penaltyConfig[2];
         
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-            DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(playerId);
-            double currentPeachBonus = healthData.getPeachBonus();
-            
-            // 检查蟠桃加成是否超过阈值（而不是检查总生命值）
-            if (currentPeachBonus <= healthThreshold) {
-                return;
-            }
-            
-            if (currentPeachBonus <= 0) {
-                return;
-            }
+            pendingDeathPenalty.add(playerId);
+            try {
+                DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(playerId);
+                double currentPeachBonus = healthData.getPeachBonus();
 
-            double penalty = currentPeachBonus * penaltyPercentage;
-            penalty = Math.max(minPenalty, Math.min(maxPenalty, penalty));
-            final double finalPenalty = penalty;
-            
-            final double newPeachBonus = Math.max(0, currentPeachBonus - penalty);
-            
-            plugin.getDatabaseManager().savePlayerData(playerId, player.getName(), newPeachBonus, 0);
-            
-            long restoreDelay = plugin.getConfig().getLong("settings.death_penalty.restore_delay_ticks", 2L);
-            plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-                AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
-                if (attr != null) {
-                    attr.getModifiers().stream()
-                        .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
-                        .forEach(attr::removeModifier);
-                    
-                    if (newPeachBonus > 0) {
-                        org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                            PEACH_MODIFIER_UUID,
-                            "LuckyPeaches",
-                            newPeachBonus,
-                            org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
-                        );
-                        attr.addModifier(modifier);
-                    }
-                    
-                    plugin.updateHealthScale(player);
-                    
-                    player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                        String.format(plugin.getMessageManager().getMessage("death_penalty"), finalPenalty, newPeachBonus)));
+                // 检查蟠桃加成是否超过阈值（而不是检查总生命值）
+                if (currentPeachBonus <= healthThreshold) {
+                    return;
                 }
-            }, restoreDelay);
+
+                if (currentPeachBonus <= 0) {
+                    return;
+                }
+
+                double penalty = currentPeachBonus * penaltyPercentage;
+                penalty = Math.max(minPenalty, Math.min(maxPenalty, penalty));
+                final double finalPenalty = penalty;
+
+                final double newPeachBonus = Math.max(0, currentPeachBonus - penalty);
+
+                plugin.getDatabaseManager().savePlayerData(playerId, player.getName(), newPeachBonus, 0);
+
+                long restoreDelay = plugin.getConfig().getLong("settings.death_penalty.restore_delay_ticks", 2L);
+                plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                    if (!player.isOnline()) return;
+                    AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+                    if (attr != null) {
+                        attr.getModifiers().stream()
+                            .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
+                            .forEach(attr::removeModifier);
+
+                        if (newPeachBonus > 0) {
+                            org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
+                                PEACH_MODIFIER_UUID,
+                                "LuckyPeaches",
+                                newPeachBonus,
+                                org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
+                            );
+                            attr.addModifier(modifier);
+                        }
+
+                        plugin.updateHealthScale(player);
+                        // 确保当前血量不超过新上限
+                        player.setHealth(Math.min(player.getHealth(), attr.getValue()));
+
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                            String.format(plugin.getMessageManager().getMessage("death_penalty"), finalPenalty, newPeachBonus)));
+                    }
+                }, restoreDelay);
+            } finally {
+                pendingDeathPenalty.remove(playerId);
+            }
         });
     }
 
@@ -551,6 +569,10 @@ public class PeachListener implements Listener {
             if (peachBonus > 0) {
                 long delayTicks = plugin.getConfig().getLong("world_integration.restore_health_delay_ticks", 60L);
                 plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                    // 检查玩家是否重新进入了屏蔽世界或已离线
+                    if (!player.isOnline() || playersInDisabledWorld.contains(playerUuid)) {
+                        return;
+                    }
                     org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
                     if (attr != null) {
                         attr.getModifiers().stream()
@@ -588,7 +610,9 @@ public class PeachListener implements Listener {
      * 应用世界最大生命值设置
      */
     private void applyWorldMaxHealth(Player player, String worldName) {
-        java.util.Map<String, Object> worldsMap = plugin.getConfig().getConfigurationSection("world_max_health.worlds").getValues(false);
+        org.bukkit.configuration.ConfigurationSection section = plugin.getConfig().getConfigurationSection("world_max_health.worlds");
+        if (section == null) return;
+        java.util.Map<String, Object> worldsMap = section.getValues(false);
         
         if (worldsMap.containsKey(worldName)) {
             UUID playerUuid = player.getUniqueId();

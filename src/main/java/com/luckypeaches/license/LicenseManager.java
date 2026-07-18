@@ -72,15 +72,21 @@ public class LicenseManager {
         };
         
         for (String service : ipServices) {
+            HttpURLConnection conn = null;
             try {
-                HttpURLConnection conn = (HttpURLConnection) new URL(service).openConnection();
+                conn = (HttpURLConnection) new URL(service).openConnection();
                 conn.setConnectTimeout(5000);
                 conn.setReadTimeout(5000);
-                String ip = new Scanner(conn.getInputStream()).useDelimiter("\\A").next().trim();
-                if (!ip.isEmpty()) {
-                    return ip;
+                try (Scanner scanner = new Scanner(conn.getInputStream()).useDelimiter("\\A")) {
+                    String ip = scanner.next().trim();
+                    if (!ip.isEmpty()) {
+                        return ip;
+                    }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
         }
         return "unknown";
     }
@@ -124,21 +130,25 @@ public class LicenseManager {
                 
                 URL url = new URL(API_URL);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("POST");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("Accept", "application/json");
-                conn.setDoOutput(true);
-                conn.setConnectTimeout(10000);
-                conn.setReadTimeout(10000);
-                
-                try (java.io.OutputStream os = conn.getOutputStream()) {
-                    byte[] input = jsonInputString.getBytes("utf-8");
-                    os.write(input, 0, input.length);
-                }
-                
-                int responseCode = conn.getResponseCode();
-                java.io.InputStream inputStream = responseCode < 400 ? conn.getInputStream() : conn.getErrorStream();
-                String responseBody = new Scanner(inputStream).useDelimiter("\\A").next();
+                try {
+                    conn.setRequestMethod("POST");
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    conn.setRequestProperty("Accept", "application/json");
+                    conn.setDoOutput(true);
+                    conn.setConnectTimeout(10000);
+                    conn.setReadTimeout(10000);
+
+                    try (java.io.OutputStream os = conn.getOutputStream()) {
+                        byte[] input = jsonInputString.getBytes("utf-8");
+                        os.write(input, 0, input.length);
+                    }
+
+                    int responseCode = conn.getResponseCode();
+                    String responseBody;
+                    try (java.io.InputStream inputStream = responseCode < 400 ? conn.getInputStream() : conn.getErrorStream();
+                         Scanner scanner = new Scanner(inputStream).useDelimiter("\\A")) {
+                        responseBody = scanner.next();
+                    }
                 
                 boolean success = responseBody.contains("\"success\":true");
                 
@@ -150,6 +160,9 @@ public class LicenseManager {
                         error = responseBody.split("\"error\":\"")[1].split("\"")[0];
                     }
                     return new LicenseResult(false, error, getErrorMessage(error));
+                }
+                } finally {
+                    conn.disconnect();
                 }
             } catch (Exception e) {
                 return new LicenseResult(false, "NETWORK_ERROR", "网络错误: " + e.getMessage());
