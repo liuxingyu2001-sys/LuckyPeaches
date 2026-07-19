@@ -214,6 +214,7 @@ public class PeachListener implements Listener {
         playersMaxHealthWorld.remove(playerId);
         eatingPlayers.remove(playerId);
         lastDeathTime.remove(playerId);
+        PeachIntegrationAPI.clearBattleStatus(playerId);
         
         // 异步保存到数据库，延迟1秒执行以确保其他插件处理完成
         plugin.getServer().getScheduler().runTaskLaterAsynchronously(plugin, () -> {
@@ -402,8 +403,13 @@ public class PeachListener implements Listener {
         AttributeInstance maxHealthAttr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
         if (maxHealthAttr == null) return;
 
+        // 战斗中不扣蟠桃血
+        if (PeachIntegrationAPI.isPlayerInBattle(player.getUniqueId())) {
+            return;
+        }
+
         // 检查蟠桃modifier是否处于激活状态
-        // 如果被其他插件调用setPlayerInBattle屏蔽了，或者处于屏蔽世界，不扣蟠桃血
+        // 如果处于屏蔽世界，不扣蟠桃血
         boolean peachActive = false;
         for (org.bukkit.attribute.AttributeModifier mod : maxHealthAttr.getModifiers()) {
             if (mod.getUniqueId().equals(PEACH_MODIFIER_UUID)) {

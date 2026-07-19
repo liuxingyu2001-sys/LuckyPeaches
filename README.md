@@ -135,14 +135,17 @@ Minecraft 幸运蟠桃插件 — 食用蟠桃可永久提升最大生命值，�
 
 ## API
 
-供其他插件调用：
+供其他插件调用（调用时无视觉变化，不触发受伤/回血动画）：
 
 ```java
-// 战斗开始时临时关闭蟠桃加成
+// 战斗开始时标记玩家（不移除 modifier，血条不变）
 PeachIntegrationAPI.setPlayerInBattle(player);
 
-// 战斗结束后恢复蟠桃加成
+// 战斗结束后移除标记（从数据库同步 modifier，仅值变化时更新）
 PeachIntegrationAPI.setPlayerNotInBattle(player);
+
+// 检查玩家是否处于战斗中（战斗中死亡不扣蟠桃血）
+PeachIntegrationAPI.isPlayerInBattle(player.getUniqueId());
 
 // 清理非本插件的血量 modifier（保留蟠桃相关）
 PeachIntegrationAPI.clearNonPeachModifiers(player);
@@ -154,6 +157,8 @@ PeachIntegrationAPI.clearNonPeachModifiers(players); // 批量
 ## 更新日志
 
 ### v2.3
+- **API 零视觉变化**：`setPlayerInBattle` / `setPlayerNotInBattle` 改为标志位机制，不再移除/恢复 modifier，调用时无屏幕闪烁或受伤动画
+- **战斗死亡豁免**：战斗中的玩家死亡不扣除蟠桃加成
 - **线程安全修复**：`eatingPlayers` 和 `playersInDisabledWorld` 改用线程安全集合，修复并发访问导致的潜在 `ConcurrentModificationException`
 - **异步备份**：自动备份任务改为异步执行，避免 `VACUUM INTO` 阻塞主线程
 - **代码优化**：统一 `PEACH_MODIFIER_UUID` 常量定义，消除三处重复；简化 `clearNonPeachModifiers` 过滤逻辑；移除 `PeachPlaceholder` 冗余 `volatile` 声明
