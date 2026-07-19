@@ -153,6 +153,12 @@ PeachIntegrationAPI.clearNonPeachModifiers(players); // 批量
 
 ## 更新日志
 
+### v2.3
+- **线程安全修复**：`eatingPlayers` 和 `playersInDisabledWorld` 改用线程安全集合，修复并发访问导致的潜在 `ConcurrentModificationException`
+- **异步备份**：自动备份任务改为异步执行，避免 `VACUUM INTO` 阻塞主线程
+- **代码优化**：统一 `PEACH_MODIFIER_UUID` 常量定义，消除三处重复；简化 `clearNonPeachModifiers` 过滤逻辑；移除 `PeachPlaceholder` 冗余 `volatile` 声明
+- **编译修复**：`pom.xml` 添加 `<fork>true</fork>` 解决 `maven-compiler-plugin:3.11.0` 的 `ConcurrentModificationException` 编译错误
+
 ### v2.2
 - **血量优化**：登录时不再每次覆盖血量，优先信任 Minecraft player.dat 的恢复结果，仅数据库与本地不一致时才同步，避免登录受伤动画
 - **吃桃体验**：吃桃成功后同步增加当前血量，满血吃完仍是满血，不再触发受伤动画

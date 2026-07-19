@@ -10,8 +10,8 @@ import java.util.UUID;
 public class PeachPlaceholder extends PlaceholderExpansion {
 
     private final LuckyPeaches plugin;
-    private volatile List<DatabaseManager.PlayerRankData> cachedTopPlayers = Collections.emptyList();
-    private volatile long cacheTime = 0;
+    private List<DatabaseManager.PlayerRankData> cachedTopPlayers = Collections.emptyList();
+    private long cacheTime = 0;
     private static final long CACHE_TTL_MS = 1000; // 1秒缓存
 
     public PeachPlaceholder(LuckyPeaches plugin) {

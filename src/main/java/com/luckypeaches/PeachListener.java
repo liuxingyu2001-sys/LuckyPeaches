@@ -23,10 +23,13 @@ import org.bukkit.inventory.ItemStack;
 public class PeachListener implements Listener {
     private final LuckyPeaches plugin;
     private final Random random = new Random();
-    private static final Set<UUID> playersInDisabledWorld = new HashSet<>();
-    private static final java.util.Map<UUID, String> playersMaxHealthWorld = new java.util.HashMap<>();
+    public static final UUID PEACH_MODIFIER_UUID = UUID.nameUUIDFromBytes("LuckyPeaches".getBytes());
+    public static final UUID WORLD_MAX_HEALTH_MODIFIER_UUID = UUID.nameUUIDFromBytes("LuckyPeachesWorldMax".getBytes());
+
+    private static final Set<UUID> playersInDisabledWorld = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final java.util.Map<UUID, String> playersMaxHealthWorld = new java.util.concurrent.ConcurrentHashMap<>();
     private static final java.util.Map<UUID, Long> lastDeathTime = new java.util.concurrent.ConcurrentHashMap<>();
-    private static final Set<UUID> eatingPlayers = new HashSet<>();
+    private static final Set<UUID> eatingPlayers = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final Set<UUID> pendingDeathPenalty = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
     
     public PeachListener(LuckyPeaches plugin) {
@@ -478,8 +481,9 @@ public class PeachListener implements Listener {
                         // 确保当前血量不超过新上限
                         player.setHealth(Math.min(player.getHealth(), attr.getValue()));
 
+                        String penaltyMsg = plugin.getMessageManager().getPrefixedMessage("death_penalty");
                         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            String.format(plugin.getMessageManager().getMessage("death_penalty"), finalPenalty, newPeachBonus)));
+                            String.format(penaltyMsg, finalPenalty, newPeachBonus)));
                     }
                 }, restoreDelay);
             } finally {
@@ -487,9 +491,6 @@ public class PeachListener implements Listener {
             }
         });
     }
-
-    private static final UUID PEACH_MODIFIER_UUID = UUID.nameUUIDFromBytes("LuckyPeaches".getBytes());
-    private static final UUID WORLD_MAX_HEALTH_MODIFIER_UUID = UUID.nameUUIDFromBytes("LuckyPeachesWorldMax".getBytes());
 
     /**
      * 玩家切换世界事件监听

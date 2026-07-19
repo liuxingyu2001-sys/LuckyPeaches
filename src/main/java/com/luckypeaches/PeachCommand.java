@@ -19,7 +19,6 @@ import org.bukkit.inventory.ItemStack;
 
 public class PeachCommand implements CommandExecutor, TabCompleter {
     private final LuckyPeaches plugin;
-    private static final java.util.UUID PEACH_MODIFIER_UUID = java.util.UUID.nameUUIDFromBytes("LuckyPeaches".getBytes());
 
     public PeachCommand(LuckyPeaches plugin) {
         this.plugin = plugin;
@@ -117,7 +116,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         final UUID targetId = target.getUniqueId();
         final String targetName = target.getName();
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-            double peachBonus = plugin.getDatabaseManager().loadPlayerData(targetId);
+            double peachBonus = plugin.getDatabaseManager().loadCompletePlayerData(targetId).getPeachBonus();
             plugin.getServer().getScheduler().runTask(plugin, () -> {
                 sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("get_health",
                     "%player%", targetName,
@@ -162,11 +161,11 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
                 AttributeInstance maxHealthAttr = onlineTarget.getAttribute(Attribute.GENERIC_MAX_HEALTH);
                 if (maxHealthAttr != null) {
                     maxHealthAttr.getModifiers().stream()
-                        .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
+                        .filter(mod -> mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
                         .forEach(maxHealthAttr::removeModifier);
 
                     org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                        PEACH_MODIFIER_UUID,
+                        PeachListener.PEACH_MODIFIER_UUID,
                         "LuckyPeaches",
                         finalNewBonus,
                         org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER

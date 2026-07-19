@@ -33,7 +33,7 @@ public class BackupManager {
         long intervalTicks = intervalHours * 60 * 60 * 20L; // 转换为tick（1小时=3600秒=72000tick）
 
         backupTaskId = plugin.getServer().getScheduler().scheduleSyncRepeatingTask(plugin, () -> {
-            backupDatabase();
+            plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::backupDatabase);
         }, intervalTicks, intervalTicks);
 
         plugin.getLogger().info("数据库自动备份已启用，间隔: " + intervalHours + " 小时");

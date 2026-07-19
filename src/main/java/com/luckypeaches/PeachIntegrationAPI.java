@@ -7,8 +7,6 @@ import java.util.UUID;
 
 public class PeachIntegrationAPI {
     
-    private static final UUID PEACH_MODIFIER_UUID = UUID.nameUUIDFromBytes("LuckyPeaches".getBytes());
-    
     /**
      * 临时关闭指定玩家的蟠桃血量加成
      * 用于战斗时临时禁用蟠桃加成
@@ -28,7 +26,7 @@ public class PeachIntegrationAPI {
         if (attr != null) {
             // 仅移除蟠桃 modifier，不重置基础血量（避免覆盖其他插件的基础血量修改）
             attr.getModifiers().stream()
-                .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
+                .filter(mod -> mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
                 .forEach(attr::removeModifier);
             plugin.updateHealthScale(player);
             player.setHealth(Math.min(player.getHealth(), attr.getValue()));
@@ -61,12 +59,12 @@ public class PeachIntegrationAPI {
                     org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
                     if (attr != null) {
                         attr.getModifiers().stream()
-                            .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
+                            .filter(mod -> mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
                             .forEach(attr::removeModifier);
                         
                         // 不重置基础血量，避免覆盖其他插件的修改
                         org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                            PEACH_MODIFIER_UUID,
+                            PeachListener.PEACH_MODIFIER_UUID,
                             "LuckyPeaches",
                             peachBonus,
                             org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
@@ -98,26 +96,8 @@ public class PeachIntegrationAPI {
             org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
             if (attr != null) {
                 // 移除所有非蟠桃插件的modifier
-                // 支持UUID和字符串ID两种格式
                 attr.getModifiers().stream()
-                    .filter(mod -> {
-                        // 检查UUID格式
-                        if (mod.getUniqueId() != null) {
-                            return !mod.getUniqueId().equals(PEACH_MODIFIER_UUID);
-                        }
-                        
-                        // 检查字符串ID格式 - 只保留确切匹配LuckyPeaches的名称
-                        String name = mod.getName();
-                        if (name != null) {
-                            // 只保留LuckyPeaches相关的modifier
-                            return !name.equalsIgnoreCase("LuckyPeaches") && 
-                                   !name.equalsIgnoreCase("luckypeaches") &&
-                                   !name.equalsIgnoreCase("peach") &&
-                                   !name.equalsIgnoreCase("Peach");
-                        }
-                        
-                        return true; // 如果没有ID和名称，移除
-                    })
+                    .filter(mod -> !mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
                     .forEach(attr::removeModifier);
                 plugin.updateHealthScale(player);
             }

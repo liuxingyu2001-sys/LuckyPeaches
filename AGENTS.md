@@ -20,7 +20,7 @@ No tests, no CI, no linting/formatting configured.
 
 ## Source layout
 
-All Java in `src/main/java/com/luckypeaches/` (flat package). One sub-package: `com/luckypeaches/license/`.
+All Java in `src/main/java/com/luckypeaches/` (flat package). One sub-package: `com.luckypeaches/license/`.
 
 | File | Role |
 |------|------|
@@ -58,3 +58,7 @@ Other permissions: `luckypeaches.maxhealth.<key>` (VIP health caps), `luckypeach
 | Paper API 1.21 | Yes | `provided` scope |
 | PlaceholderAPI | Optional | `provided`, `softdepend` |
 | CraftEngine | Optional | `provided`, Maven repo `repo.momirealms.net` |
+
+## Documentation
+
+`README.md` and `API使用文档.md` are in Chinese. The API doc covers `PeachIntegrationAPI` usage with code examples for 1v1 duels, team duels, guild wars, and arenas.
