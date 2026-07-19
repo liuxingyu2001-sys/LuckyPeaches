@@ -219,16 +219,19 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
         java.util.Map<Integer, ItemStack> leftover = target.getInventory().addItem(peach);
         
+        String peachName = peach.hasItemMeta() && peach.getItemMeta().hasDisplayName()
+            ? peach.getItemMeta().getDisplayName() : peach.getType().name();
+        
         if (!leftover.isEmpty()) {
             for (ItemStack drop : leftover.values()) {
                 target.getWorld().dropItemNaturally(target.getLocation(), drop);
             }
             sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("give_dropped",
-                "%peach%", peach.getItemMeta().getDisplayName(),
+                "%peach%", peachName,
                 "%amount%", String.valueOf(leftover.values().stream().mapToInt(ItemStack::getAmount).sum())));
         } else {
             sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("give_success",
-                "%peach%", peach.getItemMeta().getDisplayName(),
+                "%peach%", peachName,
                 "%amount%", String.valueOf(amount),
                 "%player%", target.getName()));
         }
@@ -435,7 +438,9 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
         for (java.util.Map.Entry<String, Object> entry : worldsMap.entrySet()) {
             String world = entry.getKey();
-            double health = ((Number) entry.getValue()).doubleValue();
+            Object value = entry.getValue();
+            if (!(value instanceof Number)) continue;
+            double health = ((Number) value).doubleValue();
             sender.sendMessage(plugin.getMessageManager().getReplacedMessage("world_max_health_list_item",
                     "%world%", world,
                     "%health%", String.valueOf(health)));

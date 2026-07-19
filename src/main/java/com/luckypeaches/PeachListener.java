@@ -427,7 +427,6 @@ public class PeachListener implements Listener {
         
         Long lastDeath = lastDeathTime.get(playerId);
         if (lastDeath != null && (currentTime - lastDeath) < deathCooldown) {
-            lastDeathTime.put(playerId, currentTime);
             player.sendMessage(plugin.getMessageManager().getPrefixedMessage("death_cooldown"));
             return;
         }

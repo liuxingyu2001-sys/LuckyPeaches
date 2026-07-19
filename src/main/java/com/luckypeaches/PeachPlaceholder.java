@@ -25,7 +25,8 @@ public class PeachPlaceholder extends PlaceholderExpansion {
 
     @Override
     public String getAuthor() {
-        return plugin.getDescription().getAuthors().get(0);
+        var authors = plugin.getDescription().getAuthors();
+        return authors.isEmpty() ? "unknown" : authors.get(0);
     }
 
     @Override

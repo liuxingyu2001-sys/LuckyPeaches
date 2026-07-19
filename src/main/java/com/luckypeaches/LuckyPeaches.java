@@ -86,6 +86,8 @@ public class LuckyPeaches extends JavaPlugin {
     }
     
     private void saveAllOnlinePlayers() {
+        if (databaseManager == null) return;
+        
         getLogger().info("开始保存所有在线玩家数据...");
         
         for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {

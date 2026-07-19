@@ -159,7 +159,11 @@ PeachIntegrationAPI.clearNonPeachModifiers(players); // 批量
 ### v2.3
 - **API 零视觉变化**：`setPlayerInBattle` / `setPlayerNotInBattle` 改为标志位机制，不再移除/恢复 modifier，调用时无屏幕闪烁或受伤动画
 - **战斗死亡豁免**：战斗中的玩家死亡不扣除蟠桃加成
-- **线程安全修复**：`eatingPlayers` 和 `playersInDisabledWorld` 改用线程安全集合，修复并发访问导致的潜在 `ConcurrentModificationException`
+- **ResultSet 泄漏修复**：`loadCompletePlayerData`、`getTopPlayers`、`getPlayerRank` 三处 ResultSet 未关闭，改为 try-with-resources
+- **数据库连接安全**：`close()` 方法加 `synchronized(dbLock)` 防止与异步操作并发关闭
+- **死亡冷却修复**：冷却期内死亡不再重置计时器，避免频繁死亡导致惩罚永远不生效
+- **空指针防护**：`PeachPlaceholder.getAuthor()` 防止 authors 为空崩溃；`PeachCommand.give` 防止 `getItemMeta()` 返回 null；`handleWorldListMax` 防止配置值类型异常；`saveAllOnlinePlayers` 防止 databaseManager 为 null
+- **线程安全修复**：`eatingPlayers` 和 `playersInDisabledWorld` 改用线程安全集合
 - **异步备份**：自动备份任务改为异步执行，避免 `VACUUM INTO` 阻塞主线程
 - **代码优化**：统一 `PEACH_MODIFIER_UUID` 常量定义，消除三处重复；简化 `clearNonPeachModifiers` 过滤逻辑；移除 `PeachPlaceholder` 冗余 `volatile` 声明
 - **编译修复**：`pom.xml` 添加 `<fork>true</fork>` 解决 `maven-compiler-plugin:3.11.0` 的 `ConcurrentModificationException` 编译错误

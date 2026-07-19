@@ -130,12 +130,12 @@ public class DatabaseManager {
 
             try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
                 pstmt.setString(1, uuid.toString());
-                ResultSet rs = pstmt.executeQuery();
-
-                if (rs.next()) {
-                    double peachBonus = rs.getDouble("peach_bonus");
-                    double currentHealth = rs.getDouble("current_health");
-                    return new PlayerHealthData(peachBonus, currentHealth);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        double peachBonus = rs.getDouble("peach_bonus");
+                        double currentHealth = rs.getDouble("current_health");
+                        return new PlayerHealthData(peachBonus, currentHealth);
+                    }
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("加载玩家数据失败: " + e.getMessage());
@@ -177,14 +177,14 @@ public class DatabaseManager {
 
             try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
                 pstmt.setInt(1, limit);
-                ResultSet rs = pstmt.executeQuery();
-
-                while (rs.next()) {
-                    result.add(new PlayerRankData(
-                        rs.getString("uuid"),
-                        rs.getString("username"),
-                        rs.getDouble("peach_bonus")
-                    ));
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        result.add(new PlayerRankData(
+                            rs.getString("uuid"),
+                            rs.getString("username"),
+                            rs.getDouble("peach_bonus")
+                        ));
+                    }
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("获取排行榜数据失败: " + e.getMessage());
@@ -204,10 +204,10 @@ public class DatabaseManager {
 
             try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
                 pstmt.setString(1, uuid.toString());
-                ResultSet rs = pstmt.executeQuery();
-
-                if (rs.next()) {
-                    return rs.getInt("rank") + 1;
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getInt("rank") + 1;
+                    }
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("获取玩家排名失败: " + e.getMessage());
@@ -255,12 +255,14 @@ public class DatabaseManager {
     }
 
     public void close() {
-        try {
-            if (connection != null && !connection.isClosed()) {
-                connection.close();
+        synchronized (dbLock) {
+            try {
+                if (connection != null && !connection.isClosed()) {
+                    connection.close();
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("关闭数据库连接失败: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            plugin.getLogger().severe("关闭数据库连接失败: " + e.getMessage());
         }
     }
 
