@@ -1,6 +1,19 @@
 settings:
   # 调试模式 (开启后会输出详细日志信息)
   debug: false
+  # 数据库配置
+  database:
+    # 数据库类型: sqlite 或 mysql
+    type: sqlite
+    # MySQL 配置（仅 type: mysql 时生效）
+    mysql:
+      host: localhost
+      port: 3306
+      database: luckypeaches
+      username: root
+      password: ""
+      table_prefix: "lp_"
+      max_connections: 10
   # 基础最高总生命值 (默认 100.0)
   max_health_limit: 250
   # VIP 额外生命值上限配置 (需要对应权限: luckypeaches.maxhealth.<key>)

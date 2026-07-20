@@ -66,9 +66,11 @@ Minecraft 幸运蟠桃插件 — 食用蟠桃可永久提升最大生命值，�
 
 ## 依赖
 
-| 插件 | 必需 | 说明 |
-|------|------|------|
+| 插件/库 | 必需 | 说明 |
+|---------|------|------|
 | Spigot/Paper 1.13+ | ✅ | 运行环境 |
+| MySQL Connector | ❌ 可选 | MySQL 模式需要（内置） |
+| HikariCP | ❌ 可选 | MySQL 连接池（内置） |
 | PlaceholderAPI | ❌ 可选 | 占位符扩展 |
 | CraftEngine | ❌ 可选 | 自定义物品模型 |
 
@@ -109,10 +111,37 @@ Minecraft 幸运蟠桃插件 — 食用蟠桃可永久提升最大生命值，�
 
 主配置文件 `config.yml` 包含以下模块：
 
-- **`settings`** — 调试模式、最大生命值上限、VIP 分组、死亡惩罚、音效、粒子、血量缩放、数据库备份
+- **`settings`** — 调试模式、数据库配置、最大生命值上限、VIP 分组、死亡惩罚、音效、粒子、血量缩放、数据库备份
 - **`world_integration`** — 世界屏蔽（进入/离开行为、回满血设置）
 - **`world_max_health`** — 按世界的最大生命值
 - **`peaches`** — 蟠桃定义（`display_name`、`material`、`lore`、`health_bonus`、`chance`、`custom_model_data`）
+
+### 数据库配置
+
+默认使用 SQLite，支持切换到 MySQL（适用于多服务器/bungeecord 环境）。
+
+```yaml
+settings:
+  database:
+    # 数据库类型: sqlite 或 mysql
+    type: sqlite
+    mysql:
+      host: localhost
+      port: 3306
+      database: luckypeaches
+      username: root
+      password: ""
+      table_prefix: "lp_"    # 表名前缀，避免冲突
+      max_connections: 10    # 连接池大小
+```
+
+**MySQL 前置条件：**
+1. 安装 MySQL 5.7+ 或 MariaDB 10.2+
+2. 创建数据库：`CREATE DATABASE luckypeaches CHARACTER SET utf8mb4`
+3. 修改 `config.yml` 中 `type: mysql` 并填写连接信息
+4. 重启服务器，插件自动建表
+
+**注意：** MySQL 模式下自动备份功能不可用，请使用 `mysqldump` 工具手动备份。
 
 ## 消息配置
 
@@ -157,6 +186,8 @@ PeachIntegrationAPI.clearNonPeachModifiers(players); // 批量
 ## 更新日志
 
 ### v2.3
+- **MySQL 数据库支持**：新增 MySQL/MariaDB 数据库选项，使用 HikariCP 连接池，适用于多服务器/bungeecord 环境
+- **表名前缀**：支持 `table_prefix` 配置，避免多插件表名冲突
 - **API 零视觉变化**：`setPlayerInBattle` / `setPlayerNotInBattle` 改为标志位机制，不再移除/恢复 modifier，调用时无屏幕闪烁或受伤动画
 - **战斗死亡豁免**：战斗中的玩家死亡不扣除蟠桃加成
 - **ResultSet 泄漏修复**：`loadCompletePlayerData`、`getTopPlayers`、`getPlayerRank` 三处 ResultSet 未关闭，改为 try-with-resources

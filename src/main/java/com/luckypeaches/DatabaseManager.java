@@ -1,5 +1,8 @@
 package com.luckypeaches;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+
 import java.io.File;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -12,145 +15,24 @@ import java.util.List;
 import java.util.UUID;
 
 public class DatabaseManager {
-    // 用于存储玩家健康数据的简单类
     public static class PlayerHealthData {
         private double peachBonus;
         private double currentHealth;
-        
+
         public PlayerHealthData(double peachBonus, double currentHealth) {
             this.peachBonus = peachBonus;
             this.currentHealth = currentHealth;
         }
-        
+
         public double getPeachBonus() {
             return peachBonus;
         }
-        
+
         public double getCurrentHealth() {
             return currentHealth;
         }
     }
-    private final LuckyPeaches plugin;
-    private Connection connection;
-    private final Object dbLock = new Object();
 
-    public DatabaseManager(LuckyPeaches plugin) {
-        this.plugin = plugin;
-    }
-
-    public void initialize() {
-        try {
-            File dataFolder = plugin.getDataFolder();
-            if (!dataFolder.exists()) {
-                dataFolder.mkdirs();
-            }
-
-            File dbFile = new File(dataFolder, "data.db");
-            String url = "jdbc:sqlite:" + dbFile.getAbsolutePath();
-
-            connection = DriverManager.getConnection(url);
-            createTables();
-            
-            // 数据库迁移：检查并添加缺失的current_health列
-            migrateDatabase();
-        } catch (SQLException e) {
-            plugin.getLogger().severe("数据库连接失败: " + e.getMessage());
-        }
-    }
-
-    private void createTables() throws SQLException {
-        String sql = "CREATE TABLE IF NOT EXISTS player_peach_health (" +
-                "uuid TEXT PRIMARY KEY, " +
-                "username TEXT, " +
-                "peach_bonus REAL, " +
-                "current_health REAL, " +
-                "last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
-                ")";
-
-        try (Statement stmt = connection.createStatement()) {
-            stmt.execute(sql);
-        }
-    }
-    
-    private void migrateDatabase() throws SQLException {
-        // 检查current_health列是否存在
-        String checkColumnSql = "PRAGMA table_info(player_peach_health)";
-        boolean hasCurrentHealthColumn = false;
-        
-        try (Statement stmt = connection.createStatement();
-             ResultSet rs = stmt.executeQuery(checkColumnSql)) {
-            
-            while (rs.next()) {
-                String columnName = rs.getString("name");
-                if ("current_health".equals(columnName)) {
-                    hasCurrentHealthColumn = true;
-                    break;
-                }
-            }
-        }
-        
-        // 如果不存在，添加current_health列
-        if (!hasCurrentHealthColumn) {
-            String addColumnSql = "ALTER TABLE player_peach_health ADD COLUMN current_health REAL DEFAULT 20.0";
-            try (Statement stmt = connection.createStatement()) {
-                stmt.execute(addColumnSql);
-            }
-        }
-    }
-
-    public void savePlayerData(UUID uuid, String username, double peachBonus, double currentHealth) {
-        synchronized (dbLock) {
-            String sql = "INSERT OR REPLACE INTO player_peach_health " +
-                    "(uuid, username, peach_bonus, current_health, last_updated) " +
-                    "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)";
-
-            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-                pstmt.setString(1, uuid.toString());
-                pstmt.setString(2, username);
-                pstmt.setDouble(3, peachBonus);
-                pstmt.setDouble(4, currentHealth);
-                pstmt.executeUpdate();
-            } catch (SQLException e) {
-                plugin.getLogger().severe("保存玩家数据失败: " + e.getMessage());
-            }
-        }
-    }
-    
-    // 兼容旧版本的savePlayerData方法
-    public void savePlayerData(UUID uuid, String username, double peachBonus) {
-        // 如果只提供peachBonus，不修改currentHealth
-        PlayerHealthData currentData = loadCompletePlayerData(uuid);
-        savePlayerData(uuid, username, peachBonus, currentData.getCurrentHealth());
-    }
-
-    // 加载完整的玩家健康数据
-    public PlayerHealthData loadCompletePlayerData(UUID uuid) {
-        synchronized (dbLock) {
-            String sql = "SELECT peach_bonus, current_health FROM player_peach_health WHERE uuid = ?";
-
-            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-                pstmt.setString(1, uuid.toString());
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        double peachBonus = rs.getDouble("peach_bonus");
-                        double currentHealth = rs.getDouble("current_health");
-                        return new PlayerHealthData(peachBonus, currentHealth);
-                    }
-                }
-            } catch (SQLException e) {
-                plugin.getLogger().severe("加载玩家数据失败: " + e.getMessage());
-            }
-
-            return new PlayerHealthData(0.0, 0.0);
-        }
-    }
-    
-    // 兼容旧版本的loadPlayerData方法
-    public double loadPlayerData(UUID uuid) {
-        return loadCompletePlayerData(uuid).getPeachBonus();
-    }
-
-    // 排行榜数据类
     public static class PlayerRankData {
         private final String uuid;
         private final String username;
@@ -167,15 +49,241 @@ public class DatabaseManager {
         public double getPeachBonus() { return peachBonus; }
     }
 
-    /**
-     * 获取蟠桃加成排行榜前N名玩家
-     */
+    private final LuckyPeaches plugin;
+    private final boolean useMysql;
+    private final String tableName;
+    private Connection sqliteConnection;
+    private HikariDataSource hikariPool;
+    private final Object dbLock = new Object();
+
+    public DatabaseManager(LuckyPeaches plugin) {
+        this.plugin = plugin;
+        this.useMysql = "mysql".equalsIgnoreCase(
+            plugin.getConfig().getString("settings.database.type", "sqlite"));
+        String prefix = plugin.getConfig().getString("settings.database.mysql.table_prefix", "lp_");
+        this.tableName = prefix + "player_peach_health";
+    }
+
+    public void initialize() {
+        if (useMysql) {
+            initMySQL();
+        } else {
+            initSQLite();
+        }
+    }
+
+    // ========== SQLite ==========
+
+    private void initSQLite() {
+        try {
+            File dataFolder = plugin.getDataFolder();
+            if (!dataFolder.exists()) {
+                dataFolder.mkdirs();
+            }
+
+            File dbFile = new File(dataFolder, "data.db");
+            String url = "jdbc:sqlite:" + dbFile.getAbsolutePath();
+
+            sqliteConnection = DriverManager.getConnection(url);
+            createTables();
+            migrateDatabase();
+        } catch (SQLException e) {
+            plugin.getLogger().severe("SQLite 连接失败: " + e.getMessage());
+        }
+    }
+
+    // ========== MySQL ==========
+
+    private void initMySQL() {
+        try {
+            String host = plugin.getConfig().getString("settings.database.mysql.host", "localhost");
+            int port = plugin.getConfig().getInt("settings.database.mysql.port", 3306);
+            String database = plugin.getConfig().getString("settings.database.mysql.database", "luckypeaches");
+            String username = plugin.getConfig().getString("settings.database.mysql.username", "root");
+            String password = plugin.getConfig().getString("settings.database.mysql.password", "");
+            int maxConnections = plugin.getConfig().getInt("settings.database.mysql.max_connections", 10);
+
+            HikariConfig hikariConfig = new HikariConfig();
+            hikariConfig.setJdbcUrl("jdbc:mysql://" + host + ":" + port + "/" + database
+                + "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=utf8mb4");
+            hikariConfig.setUsername(username);
+            hikariConfig.setPassword(password);
+            hikariConfig.setMaximumPoolSize(maxConnections);
+            hikariConfig.setMinimumIdle(2);
+            hikariConfig.setConnectionTimeout(5000);
+            hikariConfig.setPoolName("LuckyPeaches-Hikari");
+            hikariConfig.addDataSourceProperty("cachePrepStmts", "true");
+            hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
+            hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+
+            hikariPool = new HikariDataSource(hikariConfig);
+
+            try (Connection conn = hikariPool.getConnection()) {
+                plugin.getLogger().info("MySQL 连接成功: " + host + ":" + port + "/" + database);
+            }
+
+            createTables();
+        } catch (SQLException e) {
+            plugin.getLogger().severe("MySQL 连接失败: " + e.getMessage());
+        }
+    }
+
+    // ========== 连接获取 ==========
+
+    private Connection getConnection() throws SQLException {
+        if (useMysql) {
+            return hikariPool.getConnection();
+        }
+        return sqliteConnection;
+    }
+
+    // ========== 建表 ==========
+
+    private void createTables() throws SQLException {
+        String sql;
+        if (useMysql) {
+            sql = "CREATE TABLE IF NOT EXISTS " + tableName + " (" +
+                  "uuid VARCHAR(36) PRIMARY KEY, " +
+                  "username VARCHAR(16), " +
+                  "peach_bonus DOUBLE, " +
+                  "current_health DOUBLE, " +
+                  "last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
+                  ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+        } else {
+            sql = "CREATE TABLE IF NOT EXISTS " + tableName + " (" +
+                  "uuid TEXT PRIMARY KEY, " +
+                  "username TEXT, " +
+                  "peach_bonus REAL, " +
+                  "current_health REAL, " +
+                  "last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
+                  ")";
+        }
+
+        if (useMysql) {
+            try (Connection conn = getConnection(); Statement stmt = conn.createStatement()) {
+                stmt.execute(sql);
+            }
+        } else {
+            try (Statement stmt = sqliteConnection.createStatement()) {
+                stmt.execute(sql);
+            }
+        }
+    }
+
+    // ========== 迁移 ==========
+
+    private void migrateDatabase() throws SQLException {
+        if (useMysql) {
+            migrateMySQL();
+        } else {
+            migrateSQLite();
+        }
+    }
+
+    private void migrateSQLite() throws SQLException {
+        String checkColumnSql = "PRAGMA table_info(" + tableName + ")";
+        boolean hasCurrentHealthColumn = false;
+
+        try (Statement stmt = sqliteConnection.createStatement();
+             ResultSet rs = stmt.executeQuery(checkColumnSql)) {
+            while (rs.next()) {
+                if ("current_health".equals(rs.getString("name"))) {
+                    hasCurrentHealthColumn = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasCurrentHealthColumn) {
+            try (Statement stmt = sqliteConnection.createStatement()) {
+                stmt.execute("ALTER TABLE " + tableName + " ADD COLUMN current_health REAL DEFAULT 20.0");
+            }
+        }
+    }
+
+    private void migrateMySQL() throws SQLException {
+        try (Connection conn = getConnection();
+             ResultSet rs = conn.getMetaData().getColumns(null, null, tableName, "current_health")) {
+            if (!rs.next()) {
+                try (Statement stmt = conn.createStatement()) {
+                    stmt.execute("ALTER TABLE " + tableName + " ADD COLUMN current_health DOUBLE DEFAULT 20.0");
+                }
+            }
+        }
+    }
+
+    // ========== SQL 方言 ==========
+
+    private String upsertSQL() {
+        if (useMysql) {
+            return "INSERT INTO " + tableName + " (uuid, username, peach_bonus, current_health, last_updated) " +
+                   "VALUES (?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE " +
+                   "username=VALUES(username), peach_bonus=VALUES(peach_bonus), " +
+                   "current_health=VALUES(current_health), last_updated=NOW()";
+        }
+        return "INSERT OR REPLACE INTO " + tableName +
+               " (uuid, username, peach_bonus, current_health, last_updated) " +
+               "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)";
+    }
+
+    // ========== 保存 ==========
+
+    public void savePlayerData(UUID uuid, String username, double peachBonus, double currentHealth) {
+        synchronized (dbLock) {
+            String sql = upsertSQL();
+            try (Connection conn = getConnection(); PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, uuid.toString());
+                pstmt.setString(2, username);
+                pstmt.setDouble(3, peachBonus);
+                pstmt.setDouble(4, currentHealth);
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("保存玩家数据失败: " + e.getMessage());
+            }
+        }
+    }
+
+    public void savePlayerData(UUID uuid, String username, double peachBonus) {
+        PlayerHealthData currentData = loadCompletePlayerData(uuid);
+        savePlayerData(uuid, username, peachBonus, currentData.getCurrentHealth());
+    }
+
+    // ========== 加载 ==========
+
+    public PlayerHealthData loadCompletePlayerData(UUID uuid) {
+        synchronized (dbLock) {
+            String sql = "SELECT peach_bonus, current_health FROM " + tableName + " WHERE uuid = ?";
+
+            try (Connection conn = getConnection();
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, uuid.toString());
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return new PlayerHealthData(rs.getDouble("peach_bonus"), rs.getDouble("current_health"));
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("加载玩家数据失败: " + e.getMessage());
+            }
+
+            return new PlayerHealthData(0.0, 0.0);
+        }
+    }
+
+    public double loadPlayerData(UUID uuid) {
+        return loadCompletePlayerData(uuid).getPeachBonus();
+    }
+
+    // ========== 排行榜 ==========
+
     public List<PlayerRankData> getTopPlayers(int limit) {
         synchronized (dbLock) {
             List<PlayerRankData> result = new ArrayList<>();
-            String sql = "SELECT uuid, username, peach_bonus FROM player_peach_health WHERE peach_bonus > 0 ORDER BY peach_bonus DESC LIMIT ?";
+            String sql = "SELECT uuid, username, peach_bonus FROM " + tableName +
+                         " WHERE peach_bonus > 0 ORDER BY peach_bonus DESC LIMIT ?";
 
-            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            try (Connection conn = getConnection();
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setInt(1, limit);
                 try (ResultSet rs = pstmt.executeQuery()) {
                     while (rs.next()) {
@@ -194,15 +302,13 @@ public class DatabaseManager {
         }
     }
 
-    /**
-     * 获取玩家在蟠桃排行榜中的排名（1-based）
-     */
     public int getPlayerRank(UUID uuid) {
         synchronized (dbLock) {
-            String sql = "SELECT COUNT(*) as rank FROM player_peach_health WHERE peach_bonus > 0 " +
-                         "AND peach_bonus > (SELECT COALESCE(peach_bonus, 0) FROM player_peach_health WHERE uuid = ?)";
+            String sql = "SELECT COUNT(*) as rank FROM " + tableName + " WHERE peach_bonus > 0 " +
+                         "AND peach_bonus > (SELECT COALESCE(peach_bonus, 0) FROM " + tableName + " WHERE uuid = ?)";
 
-            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            try (Connection conn = getConnection();
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, uuid.toString());
                 try (ResultSet rs = pstmt.executeQuery()) {
                     if (rs.next()) {
@@ -217,14 +323,12 @@ public class DatabaseManager {
         }
     }
 
-    /**
-     * 获取拥有蟠桃加成的玩家总数
-     */
     public int getTotalPlayersWithPeachBonus() {
         synchronized (dbLock) {
-            String sql = "SELECT COUNT(*) as total FROM player_peach_health WHERE peach_bonus > 0";
+            String sql = "SELECT COUNT(*) as total FROM " + tableName + " WHERE peach_bonus > 0";
 
-            try (Statement stmt = connection.createStatement();
+            try (Connection conn = getConnection();
+                 Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery(sql)) {
                 if (rs.next()) {
                     return rs.getInt("total");
@@ -237,14 +341,16 @@ public class DatabaseManager {
         }
     }
 
-    /**
-     * 使用 VACUUM INTO 创建一致的数据库备份
-     * @param backupFile 备份目标文件
-     * @return 备份是否成功
-     */
+    // ========== 备份 ==========
+
     public boolean backupToFile(File backupFile) {
+        if (useMysql) {
+            plugin.getLogger().info("MySQL 模式下备份请使用 mysqldump 工具");
+            return false;
+        }
+
         synchronized (dbLock) {
-            try (Statement stmt = connection.createStatement()) {
+            try (Statement stmt = sqliteConnection.createStatement()) {
                 stmt.execute("VACUUM INTO '" + backupFile.getAbsolutePath() + "'");
                 return true;
             } catch (SQLException e) {
@@ -254,25 +360,35 @@ public class DatabaseManager {
         }
     }
 
+    // ========== 关闭 ==========
+
     public void close() {
-        synchronized (dbLock) {
-            try {
-                if (connection != null && !connection.isClosed()) {
-                    connection.close();
+        if (useMysql) {
+            if (hikariPool != null && !hikariPool.isClosed()) {
+                hikariPool.close();
+            }
+        } else {
+            synchronized (dbLock) {
+                try {
+                    if (sqliteConnection != null && !sqliteConnection.isClosed()) {
+                        sqliteConnection.close();
+                    }
+                } catch (SQLException e) {
+                    plugin.getLogger().severe("关闭数据库连接失败: " + e.getMessage());
                 }
-            } catch (SQLException e) {
-                plugin.getLogger().severe("关闭数据库连接失败: " + e.getMessage());
             }
         }
     }
 
+    // ========== 迁移旧数据 ==========
+
     public void migrateFromPersistentData(org.bukkit.entity.Player player) {
         org.bukkit.NamespacedKey key = new org.bukkit.NamespacedKey(plugin, "peach_health");
         Double oldBonus = player.getPersistentDataContainer().get(key, org.bukkit.persistence.PersistentDataType.DOUBLE);
-        
+
         if (oldBonus != null && oldBonus > 0) {
             double currentBonus = loadPlayerData(player.getUniqueId());
-            
+
             if (currentBonus == 0.0) {
                 savePlayerData(player.getUniqueId(), player.getName(), oldBonus);
                 player.getPersistentDataContainer().remove(key);
