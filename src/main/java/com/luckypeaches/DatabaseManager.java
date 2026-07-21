@@ -52,6 +52,7 @@ public class DatabaseManager {
     private final LuckyPeaches plugin;
     private final boolean useMysql;
     private final String tableName;
+    private final File sqliteFile;
     private Connection sqliteConnection;
     private HikariDataSource hikariPool;
     private final Object dbLock = new Object();
@@ -62,6 +63,7 @@ public class DatabaseManager {
             plugin.getConfig().getString("settings.database.type", "sqlite"));
         String prefix = plugin.getConfig().getString("settings.database.mysql.table_prefix", "lp_");
         this.tableName = prefix + "player_peach_health";
+        this.sqliteFile = new File(plugin.getDataFolder(), "data.db");
     }
 
     public void initialize() {
@@ -81,8 +83,7 @@ public class DatabaseManager {
                 dataFolder.mkdirs();
             }
 
-            File dbFile = new File(dataFolder, "data.db");
-            String url = "jdbc:sqlite:" + dbFile.getAbsolutePath();
+            String url = "jdbc:sqlite:" + sqliteFile.getAbsolutePath();
 
             sqliteConnection = DriverManager.getConnection(url);
             createTables();
@@ -376,6 +377,61 @@ public class DatabaseManager {
                 } catch (SQLException e) {
                     plugin.getLogger().severe("关闭数据库连接失败: " + e.getMessage());
                 }
+            }
+        }
+    }
+
+    // ========== 数据库类型查询 ==========
+
+    public boolean isUseMysql() {
+        return useMysql;
+    }
+
+    // ========== 热切换数据库 ==========
+
+    /**
+     * 读取当前数据库全部数据（用于迁移）
+     */
+    public List<Object[]> readAllDataForMigration() {
+        List<Object[]> data = new ArrayList<>();
+        String sql = "SELECT uuid, username, peach_bonus, current_health FROM " + tableName;
+        synchronized (dbLock) {
+            try (Connection conn = getConnection();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
+                while (rs.next()) {
+                    data.add(new Object[]{
+                        rs.getString("uuid"),
+                        rs.getString("username"),
+                        rs.getDouble("peach_bonus"),
+                        rs.getDouble("current_health")
+                    });
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("读取数据失败: " + e.getMessage());
+            }
+        }
+        return data;
+    }
+
+    /**
+     * 将数据写入当前数据库（用于迁移后的写入）
+     */
+    public void writeAllData(List<Object[]> data) {
+        String sql = upsertSQL();
+        synchronized (dbLock) {
+            try (Connection conn = getConnection();
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                for (Object[] row : data) {
+                    pstmt.setString(1, (String) row[0]);
+                    pstmt.setString(2, (String) row[1]);
+                    pstmt.setDouble(3, (double) row[2]);
+                    pstmt.setDouble(4, (double) row[3]);
+                    pstmt.addBatch();
+                }
+                pstmt.executeBatch();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("写入数据失败: " + e.getMessage());
             }
         }
     }

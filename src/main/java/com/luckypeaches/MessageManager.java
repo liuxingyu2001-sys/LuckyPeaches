@@ -115,6 +115,13 @@ public class MessageManager {
         }
     }
 
+    public void sendDatabaseHelpMessage(CommandSender sender) {
+        List<String> helpLines = getMessageList("db_help");
+        for (String line : helpLines) {
+            sender.sendMessage(ChatColor.translateAlternateColorCodes('&', line));
+        }
+    }
+
     public void saveMessages() {
         try {
             messagesConfig.save(messagesFile);

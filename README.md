@@ -56,6 +56,14 @@ Minecraft 幸运蟠桃插件 — 食用蟠桃可永久提升最大生命值，�
 | `/lp world listmax` | 列出所有世界的最大生命值 |
 | `/lp world removemax <世界>` | 移除世界最大生命值限制 |
 
+### 数据库管理
+
+| 命令 | 说明 |
+|------|------|
+| `/lp db status` | 查看当前数据库类型（SQLite/MySQL） |
+| `/lp db mysql` | 切换到 MySQL 并自动迁移数据 |
+| `/lp db sqlite` | 切换到 SQLite 并自动迁移数据 |
+
 ## 权限
 
 | 权限 | 说明 |
@@ -118,7 +126,7 @@ Minecraft 幸运蟠桃插件 — 食用蟠桃可永久提升最大生命值，�
 
 ### 数据库配置
 
-默认使用 SQLite，支持切换到 MySQL（适用于多服务器/bungeecord 环境）。
+默认使用 SQLite，支持热切换到 MySQL（适用于多服务器/bungeecord 环境）。可通过 `/lp db` 命令在游戏内一键切换，无需重启服务器，数据自动迁移。
 
 ```yaml
 settings:
@@ -138,8 +146,8 @@ settings:
 **MySQL 前置条件：**
 1. 安装 MySQL 5.7+ 或 MariaDB 10.2+
 2. 创建数据库：`CREATE DATABASE luckypeaches CHARACTER SET utf8mb4`
-3. 修改 `config.yml` 中 `type: mysql` 并填写连接信息
-4. 重启服务器，插件自动建表
+3. 在 `config.yml` 中填写 MySQL 连接信息
+4. 使用 `/lp db mysql` 切换到 MySQL 并自动迁移数据
 
 **注意：** MySQL 模式下自动备份功能不可用，请使用 `mysqldump` 工具手动备份。
 
@@ -187,6 +195,7 @@ PeachIntegrationAPI.clearNonPeachModifiers(players); // 批量
 
 ### v2.3
 - **MySQL 数据库支持**：新增 MySQL/MariaDB 数据库选项，使用 HikariCP 连接池，适用于多服务器/bungeecord 环境
+- **数据库热切换**：新增 `/lp db` 命令，支持游戏内一键切换 SQLite ↔ MySQL，数据自动迁移，无需重启服务器
 - **表名前缀**：支持 `table_prefix` 配置，避免多插件表名冲突
 - **API 零视觉变化**：`setPlayerInBattle` / `setPlayerNotInBattle` 改为标志位机制，不再移除/恢复 modifier，调用时无屏幕闪烁或受伤动画
 - **战斗死亡豁免**：战斗中的玩家死亡不扣除蟠桃加成

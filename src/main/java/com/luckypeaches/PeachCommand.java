@@ -55,6 +55,9 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             case "world":
                 handleWorld(sender, args);
                 break;
+            case "db":
+                handleDatabase(sender, args);
+                break;
             default:
                 sendHelp(sender);
                 break;
@@ -465,6 +468,103 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         }
     }
 
+    private void handleDatabase(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            plugin.getMessageManager().sendDatabaseHelpMessage(sender);
+            return;
+        }
+
+        switch (args[1].toLowerCase()) {
+            case "status":
+                String currentType = plugin.getDatabaseManager().isUseMysql() ? "MySQL" : "SQLite";
+                sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_current_type",
+                    "%type%", currentType));
+                break;
+            case "mysql":
+            case "sqlite":
+                handleDatabaseSwitch(sender, args[1].toLowerCase());
+                break;
+            default:
+                plugin.getMessageManager().sendDatabaseHelpMessage(sender);
+                break;
+        }
+    }
+
+    private void handleDatabaseSwitch(CommandSender sender, String targetType) {
+        boolean targetIsMysql = "mysql".equalsIgnoreCase(targetType);
+        boolean currentIsMysql = plugin.getDatabaseManager().isUseMysql();
+
+        if (targetIsMysql == currentIsMysql) {
+            String typeName = targetIsMysql ? "MySQL" : "SQLite";
+            sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_already_same_type",
+                "%type%", typeName));
+            return;
+        }
+
+        String typeName = targetIsMysql ? "MySQL" : "SQLite";
+        sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_switching",
+            "%type%", typeName));
+
+        // 异步执行迁移
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                // 1. 保存所有在线玩家数据到旧数据库
+                plugin.saveAllOnlinePlayers();
+
+                // 2. 读取当前全部数据
+                java.util.List<Object[]> data = plugin.getDatabaseManager().readAllDataForMigration();
+                plugin.getLogger().info("已读取 " + data.size() + " 条记录，准备迁移到 " + typeName + "...");
+
+                // 3. 关闭旧数据库
+                plugin.getDatabaseManager().close();
+
+                // 4. 修改 config
+                plugin.getConfig().set("settings.database.type", targetType);
+                plugin.saveConfig();
+                plugin.reloadConfig();
+
+                // 5. 创建新的 DatabaseManager 并初始化
+                com.luckypeaches.DatabaseManager newDbManager = new com.luckypeaches.DatabaseManager(plugin);
+                newDbManager.initialize();
+
+                // 6. 写入数据到新数据库
+                if (!data.isEmpty()) {
+                    newDbManager.writeAllData(data);
+                    plugin.getLogger().info("数据迁移完成，共迁移 " + data.size() + " 条记录");
+                }
+
+                // 7. 替换 databaseManager
+                plugin.setDatabaseManager(newDbManager);
+
+                // 8. 重启 BackupManager
+                plugin.getBackupManager().shutdown();
+                plugin.setBackupManager(new com.luckypeaches.BackupManager(plugin));
+                plugin.getBackupManager().initialize();
+
+                // 9. 主线程重新应用 modifier
+                final int count = data.size();
+                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                    plugin.reapplyModifiersForOnlinePlayers();
+                    if (count > 0) {
+                        sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_switch_success",
+                            "%type%", typeName,
+                            "%count%", String.valueOf(count)));
+                    } else {
+                        sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_switch_success_empty",
+                            "%type%", typeName));
+                    }
+                });
+            } catch (Exception e) {
+                plugin.getLogger().severe("数据库切换失败: " + e.getMessage());
+                e.printStackTrace();
+                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                    sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_switch_failed",
+                        "%error%", e.getMessage()));
+                });
+            }
+        });
+    }
+
     private void sendHelp(CommandSender sender) {
         plugin.getMessageManager().sendHelpMessage(sender);
     }
@@ -474,7 +574,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         if (!sender.hasPermission("luckypeach.admin")) return new ArrayList<>();
 
         if (args.length == 1) {
-            return Arrays.asList("give", "reload", "help", "gethealth", "sethealth", "backup", "world").stream()
+            return Arrays.asList("give", "reload", "help", "gethealth", "sethealth", "backup", "world", "db").stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
                     .collect(Collectors.toList());
         }
@@ -494,6 +594,12 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 2 && args[0].equalsIgnoreCase("reload")) {
             return Arrays.asList("license").stream()
+                    .filter(s -> s.startsWith(args[1].toLowerCase()))
+                    .collect(Collectors.toList());
+        }
+
+        if (args.length == 2 && args[0].equalsIgnoreCase("db")) {
+            return Arrays.asList("status", "mysql", "sqlite").stream()
                     .filter(s -> s.startsWith(args[1].toLowerCase()))
                     .collect(Collectors.toList());
         }

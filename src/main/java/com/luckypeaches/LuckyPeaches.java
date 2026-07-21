@@ -85,7 +85,15 @@ public class LuckyPeaches extends JavaPlugin {
         }
     }
     
-    private void saveAllOnlinePlayers() {
+    public void setDatabaseManager(DatabaseManager databaseManager) {
+        this.databaseManager = databaseManager;
+    }
+
+    public void setBackupManager(BackupManager backupManager) {
+        this.backupManager = backupManager;
+    }
+
+    public void saveAllOnlinePlayers() {
         if (databaseManager == null) return;
         
         getLogger().info("开始保存所有在线玩家数据...");
@@ -146,6 +154,39 @@ public class LuckyPeaches extends JavaPlugin {
     
     public MessageManager getMessageManager() {
         return messageManager;
+    }
+
+    /**
+     * 重新对所有在线玩家应用 modifier
+     */
+    public void reapplyModifiersForOnlinePlayers() {
+        for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {
+            DatabaseManager.PlayerHealthData data = databaseManager.loadCompletePlayerData(player.getUniqueId());
+            double peachBonus = data.getPeachBonus();
+
+            if (peachBonus > 0) {
+                org.bukkit.attribute.AttributeInstance maxHealthAttr =
+                    player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+                if (maxHealthAttr != null) {
+                    // 移除旧 modifier
+                    maxHealthAttr.getModifiers().stream()
+                        .filter(mod -> mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
+                        .forEach(maxHealthAttr::removeModifier);
+
+                    // 添加新 modifier
+                    org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
+                        PeachListener.PEACH_MODIFIER_UUID,
+                        "LuckyPeaches",
+                        peachBonus,
+                        org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
+                    );
+                    maxHealthAttr.addModifier(modifier);
+                }
+
+                // 应用血量缩放
+                updateHealthScale(player);
+            }
+        }
     }
 
     public void updateHealthScale(org.bukkit.entity.Player player) {
