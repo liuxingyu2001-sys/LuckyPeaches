@@ -52,6 +52,7 @@ public class DatabaseManager {
     private final LuckyPeaches plugin;
     private final boolean useMysql;
     private final String tableName;
+    private final String configTableName;
     private final File sqliteFile;
     private Connection sqliteConnection;
     private HikariDataSource hikariPool;
@@ -63,6 +64,7 @@ public class DatabaseManager {
             plugin.getConfig().getString("settings.database.type", "sqlite"));
         String prefix = plugin.getConfig().getString("settings.database.mysql.table_prefix", "lp_");
         this.tableName = prefix + "player_peach_health";
+        this.configTableName = prefix + "config";
         this.sqliteFile = new File(plugin.getDataFolder(), "data.db");
     }
 
@@ -71,6 +73,12 @@ public class DatabaseManager {
             initMySQL();
         } else {
             initSQLite();
+        }
+        // 迁移对 SQLite 和 MySQL 都需要执行
+        try {
+            migrateDatabase();
+        } catch (SQLException e) {
+            plugin.getLogger().severe("数据库迁移失败: " + e.getMessage());
         }
     }
 
@@ -87,7 +95,6 @@ public class DatabaseManager {
 
             sqliteConnection = DriverManager.getConnection(url);
             createTables();
-            migrateDatabase();
         } catch (SQLException e) {
             plugin.getLogger().severe("SQLite 连接失败: " + e.getMessage());
         }
@@ -104,9 +111,20 @@ public class DatabaseManager {
             String password = plugin.getConfig().getString("settings.database.mysql.password", "");
             int maxConnections = plugin.getConfig().getInt("settings.database.mysql.max_connections", 10);
 
+            // 先连接到 MySQL 服务器（不指定数据库），尝试自动创建数据库
+            String serverUrl = "jdbc:mysql://" + host + ":" + port
+                + "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8";
+            try (Connection serverConn = DriverManager.getConnection(serverUrl, username, password);
+                 Statement stmt = serverConn.createStatement()) {
+                stmt.executeUpdate("CREATE DATABASE IF NOT EXISTS `" + database
+                    + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+                plugin.getLogger().info("MySQL 数据库 " + database + " 已就绪");
+            }
+
+            // 再连接到目标数据库
             HikariConfig hikariConfig = new HikariConfig();
             hikariConfig.setJdbcUrl("jdbc:mysql://" + host + ":" + port + "/" + database
-                + "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=utf8mb4");
+                + "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8");
             hikariConfig.setUsername(username);
             hikariConfig.setPassword(password);
             hikariConfig.setMaximumPoolSize(maxConnections);
@@ -133,9 +151,40 @@ public class DatabaseManager {
 
     private Connection getConnection() throws SQLException {
         if (useMysql) {
+            if (hikariPool == null || hikariPool.isClosed()) {
+                throw new SQLException("MySQL 连接池未初始化或已关闭");
+            }
             return hikariPool.getConnection();
         }
+        if (sqliteConnection == null || sqliteConnection.isClosed()) {
+            String url = "jdbc:sqlite:" + sqliteFile.getAbsolutePath();
+            sqliteConnection = DriverManager.getConnection(url);
+        }
         return sqliteConnection;
+    }
+
+    /**
+     * 执行数据库操作的回调接口
+     */
+    @FunctionalInterface
+    private interface DBAction<T> {
+        T execute(Connection conn) throws SQLException;
+    }
+
+    /**
+     * 统一执行数据库操作，自动处理连接生命周期
+     * MySQL: 用 try-with-resources 关闭连接归还池
+     * SQLite: 复用单连接，不关闭
+     */
+    private <T> T executeQuery(DBAction<T> action) throws SQLException {
+        Connection conn = getConnection();
+        if (useMysql) {
+            try (conn) {
+                return action.execute(conn);
+            }
+        } else {
+            return action.execute(conn);
+        }
     }
 
     // ========== 建表 ==========
@@ -160,14 +209,27 @@ public class DatabaseManager {
                   ")";
         }
 
+        executeQuery(conn -> {
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute(sql);
+            }
+            return null;
+        });
+
+        // 创建配置同步表（MySQL 模式）
         if (useMysql) {
-            try (Connection conn = getConnection(); Statement stmt = conn.createStatement()) {
-                stmt.execute(sql);
-            }
-        } else {
-            try (Statement stmt = sqliteConnection.createStatement()) {
-                stmt.execute(sql);
-            }
+            String configSql = "CREATE TABLE IF NOT EXISTS " + configTableName + " (" +
+                              "id INT PRIMARY KEY DEFAULT 1, " +
+                              "config_data LONGTEXT, " +
+                              "server_name VARCHAR(64), " +
+                              "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" +
+                              ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+            executeQuery(conn -> {
+                try (Statement stmt = conn.createStatement()) {
+                    stmt.execute(configSql);
+                }
+                return null;
+            });
         }
     }
 
@@ -182,6 +244,9 @@ public class DatabaseManager {
     }
 
     private void migrateSQLite() throws SQLException {
+        if (sqliteConnection == null || sqliteConnection.isClosed()) {
+            return;
+        }
         String checkColumnSql = "PRAGMA table_info(" + tableName + ")";
         boolean hasCurrentHealthColumn = false;
 
@@ -203,14 +268,16 @@ public class DatabaseManager {
     }
 
     private void migrateMySQL() throws SQLException {
-        try (Connection conn = getConnection();
-             ResultSet rs = conn.getMetaData().getColumns(null, null, tableName, "current_health")) {
-            if (!rs.next()) {
-                try (Statement stmt = conn.createStatement()) {
-                    stmt.execute("ALTER TABLE " + tableName + " ADD COLUMN current_health DOUBLE DEFAULT 20.0");
+        executeQuery(conn -> {
+            try (ResultSet rs = conn.getMetaData().getColumns(null, null, tableName, "current_health")) {
+                if (!rs.next()) {
+                    try (Statement stmt = conn.createStatement()) {
+                        stmt.execute("ALTER TABLE " + tableName + " ADD COLUMN current_health DOUBLE DEFAULT 20.0");
+                    }
                 }
             }
-        }
+            return null;
+        });
     }
 
     // ========== SQL 方言 ==========
@@ -232,12 +299,17 @@ public class DatabaseManager {
     public void savePlayerData(UUID uuid, String username, double peachBonus, double currentHealth) {
         synchronized (dbLock) {
             String sql = upsertSQL();
-            try (Connection conn = getConnection(); PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, uuid.toString());
-                pstmt.setString(2, username);
-                pstmt.setDouble(3, peachBonus);
-                pstmt.setDouble(4, currentHealth);
-                pstmt.executeUpdate();
+            try {
+                executeQuery(conn -> {
+                    try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                        pstmt.setString(1, uuid.toString());
+                        pstmt.setString(2, username);
+                        pstmt.setDouble(3, peachBonus);
+                        pstmt.setDouble(4, currentHealth);
+                        pstmt.executeUpdate();
+                    }
+                    return null;
+                });
             } catch (SQLException e) {
                 plugin.getLogger().severe("保存玩家数据失败: " + e.getMessage());
             }
@@ -255,14 +327,18 @@ public class DatabaseManager {
         synchronized (dbLock) {
             String sql = "SELECT peach_bonus, current_health FROM " + tableName + " WHERE uuid = ?";
 
-            try (Connection conn = getConnection();
-                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, uuid.toString());
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        return new PlayerHealthData(rs.getDouble("peach_bonus"), rs.getDouble("current_health"));
+            try {
+                return executeQuery(conn -> {
+                    try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                        pstmt.setString(1, uuid.toString());
+                        try (ResultSet rs = pstmt.executeQuery()) {
+                            if (rs.next()) {
+                                return new PlayerHealthData(rs.getDouble("peach_bonus"), rs.getDouble("current_health"));
+                            }
+                        }
                     }
-                }
+                    return new PlayerHealthData(0.0, 0.0);
+                });
             } catch (SQLException e) {
                 plugin.getLogger().severe("加载玩家数据失败: " + e.getMessage());
             }
@@ -283,18 +359,22 @@ public class DatabaseManager {
             String sql = "SELECT uuid, username, peach_bonus FROM " + tableName +
                          " WHERE peach_bonus > 0 ORDER BY peach_bonus DESC LIMIT ?";
 
-            try (Connection conn = getConnection();
-                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setInt(1, limit);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    while (rs.next()) {
-                        result.add(new PlayerRankData(
-                            rs.getString("uuid"),
-                            rs.getString("username"),
-                            rs.getDouble("peach_bonus")
-                        ));
+            try {
+                executeQuery(conn -> {
+                    try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                        pstmt.setInt(1, limit);
+                        try (ResultSet rs = pstmt.executeQuery()) {
+                            while (rs.next()) {
+                                result.add(new PlayerRankData(
+                                    rs.getString("uuid"),
+                                    rs.getString("username"),
+                                    rs.getDouble("peach_bonus")
+                                ));
+                            }
+                        }
                     }
-                }
+                    return null;
+                });
             } catch (SQLException e) {
                 plugin.getLogger().severe("获取排行榜数据失败: " + e.getMessage());
             }
@@ -308,14 +388,18 @@ public class DatabaseManager {
             String sql = "SELECT COUNT(*) as rank FROM " + tableName + " WHERE peach_bonus > 0 " +
                          "AND peach_bonus > (SELECT COALESCE(peach_bonus, 0) FROM " + tableName + " WHERE uuid = ?)";
 
-            try (Connection conn = getConnection();
-                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, uuid.toString());
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        return rs.getInt("rank") + 1;
+            try {
+                return executeQuery(conn -> {
+                    try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                        pstmt.setString(1, uuid.toString());
+                        try (ResultSet rs = pstmt.executeQuery()) {
+                            if (rs.next()) {
+                                return rs.getInt("rank") + 1;
+                            }
+                        }
                     }
-                }
+                    return -1;
+                });
             } catch (SQLException e) {
                 plugin.getLogger().severe("获取玩家排名失败: " + e.getMessage());
             }
@@ -328,12 +412,16 @@ public class DatabaseManager {
         synchronized (dbLock) {
             String sql = "SELECT COUNT(*) as total FROM " + tableName + " WHERE peach_bonus > 0";
 
-            try (Connection conn = getConnection();
-                 Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery(sql)) {
-                if (rs.next()) {
-                    return rs.getInt("total");
-                }
+            try {
+                return executeQuery(conn -> {
+                    try (Statement stmt = conn.createStatement();
+                         ResultSet rs = stmt.executeQuery(sql)) {
+                        if (rs.next()) {
+                            return rs.getInt("total");
+                        }
+                    }
+                    return 0;
+                });
             } catch (SQLException e) {
                 plugin.getLogger().severe("获取玩家总数失败: " + e.getMessage());
             }
@@ -342,15 +430,50 @@ public class DatabaseManager {
         }
     }
 
+    // ========== 配置同步 ==========
+
+    /**
+     * 从 MySQL 加载配置（代理端同步）
+     * @return 配置数据字符串，失败返回 null
+     */
+    public String loadConfigFromDatabase() {
+        if (!useMysql) return null;
+
+        String sql = "SELECT config_data, server_name FROM " + configTableName + " WHERE id = 1";
+
+        synchronized (dbLock) {
+            try {
+                return executeQuery(conn -> {
+                    try (PreparedStatement pstmt = conn.prepareStatement(sql);
+                         ResultSet rs = pstmt.executeQuery()) {
+                        if (rs.next()) {
+                            String data = rs.getString("config_data");
+                            String source = rs.getString("server_name");
+                            plugin.getLogger().info("从代理端加载配置（来源: " + source + "）");
+                            return data;
+                        }
+                    }
+                    return null;
+                });
+            } catch (SQLException e) {
+                plugin.getLogger().severe("从代理端加载配置失败: " + e.getMessage());
+            }
+        }
+        return null;
+    }
+
     // ========== 备份 ==========
 
     public boolean backupToFile(File backupFile) {
         if (useMysql) {
-            plugin.getLogger().info("MySQL 模式下备份请使用 mysqldump 工具");
             return false;
         }
 
         synchronized (dbLock) {
+            if (sqliteConnection == null) {
+                plugin.getLogger().severe("数据库备份失败: SQLite 连接未初始化");
+                return false;
+            }
             try (Statement stmt = sqliteConnection.createStatement()) {
                 stmt.execute("VACUUM INTO '" + backupFile.getAbsolutePath() + "'");
                 return true;
@@ -359,6 +482,41 @@ public class DatabaseManager {
                 return false;
             }
         }
+    }
+
+    /**
+     * 导出所有数据（用于 YML/JSON 备份）
+     */
+    public List<java.util.Map<String, Object>> exportAllData() {
+        List<java.util.Map<String, Object>> result = new ArrayList<>();
+        String sql = "SELECT uuid, username, peach_bonus, current_health, last_updated FROM " + tableName;
+
+        synchronized (dbLock) {
+            try {
+                executeQuery(conn -> {
+                    try (Statement stmt = conn.createStatement();
+                         ResultSet rs = stmt.executeQuery(sql)) {
+                        while (rs.next()) {
+                            java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
+                            row.put("uuid", rs.getString("uuid"));
+                            row.put("username", rs.getString("username"));
+                            row.put("peach_bonus", rs.getDouble("peach_bonus"));
+                            row.put("current_health", rs.getDouble("current_health"));
+                            row.put("last_updated", rs.getString("last_updated"));
+                            result.add(row);
+                        }
+                    }
+                    return null;
+                });
+            } catch (SQLException e) {
+                plugin.getLogger().severe("导出数据失败: " + e.getMessage());
+            }
+        }
+        return result;
+    }
+
+    public boolean isMysql() {
+        return useMysql;
     }
 
     // ========== 关闭 ==========
@@ -396,17 +554,21 @@ public class DatabaseManager {
         List<Object[]> data = new ArrayList<>();
         String sql = "SELECT uuid, username, peach_bonus, current_health FROM " + tableName;
         synchronized (dbLock) {
-            try (Connection conn = getConnection();
-                 Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery(sql)) {
-                while (rs.next()) {
-                    data.add(new Object[]{
-                        rs.getString("uuid"),
-                        rs.getString("username"),
-                        rs.getDouble("peach_bonus"),
-                        rs.getDouble("current_health")
-                    });
-                }
+            try {
+                executeQuery(conn -> {
+                    try (Statement stmt = conn.createStatement();
+                         ResultSet rs = stmt.executeQuery(sql)) {
+                        while (rs.next()) {
+                            data.add(new Object[]{
+                                rs.getString("uuid"),
+                                rs.getString("username"),
+                                rs.getDouble("peach_bonus"),
+                                rs.getDouble("current_health")
+                            });
+                        }
+                    }
+                    return null;
+                });
             } catch (SQLException e) {
                 plugin.getLogger().severe("读取数据失败: " + e.getMessage());
             }
@@ -420,35 +582,99 @@ public class DatabaseManager {
     public void writeAllData(List<Object[]> data) {
         String sql = upsertSQL();
         synchronized (dbLock) {
-            try (Connection conn = getConnection();
-                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                for (Object[] row : data) {
-                    pstmt.setString(1, (String) row[0]);
-                    pstmt.setString(2, (String) row[1]);
-                    pstmt.setDouble(3, (double) row[2]);
-                    pstmt.setDouble(4, (double) row[3]);
-                    pstmt.addBatch();
-                }
-                pstmt.executeBatch();
+            try {
+                executeQuery(conn -> {
+                    try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                        for (Object[] row : data) {
+                            pstmt.setString(1, (String) row[0]);
+                            pstmt.setString(2, (String) row[1]);
+                            pstmt.setDouble(3, (double) row[2]);
+                            pstmt.setDouble(4, (double) row[3]);
+                            pstmt.addBatch();
+                        }
+                        pstmt.executeBatch();
+                    }
+                    return null;
+                });
             } catch (SQLException e) {
                 plugin.getLogger().severe("写入数据失败: " + e.getMessage());
             }
         }
     }
 
-    // ========== 迁移旧数据 ==========
-
-    public void migrateFromPersistentData(org.bukkit.entity.Player player) {
-        org.bukkit.NamespacedKey key = new org.bukkit.NamespacedKey(plugin, "peach_health");
-        Double oldBonus = player.getPersistentDataContainer().get(key, org.bukkit.persistence.PersistentDataType.DOUBLE);
-
-        if (oldBonus != null && oldBonus > 0) {
-            double currentBonus = loadPlayerData(player.getUniqueId());
-
-            if (currentBonus == 0.0) {
-                savePlayerData(player.getUniqueId(), player.getName(), oldBonus);
-                player.getPersistentDataContainer().remove(key);
-            }
+    /**
+     * 从 SQLite 文件导入数据到当前数据库（仅 MySQL 模式可用）
+     * @param sqliteFile SQLite 数据库文件
+     * @return 导入的记录数，失败返回 -1
+     */
+    public int importFromSQLite(File sqliteFile) {
+        if (!sqliteFile.exists()) {
+            plugin.getLogger().severe("SQLite 文件不存在: " + sqliteFile.getAbsolutePath());
+            return -1;
         }
+
+        if (!useMysql) {
+            plugin.getLogger().severe("当前不是 MySQL 模式，无法导入");
+            return -1;
+        }
+
+        List<Object[]> data = new ArrayList<>();
+        String url = "jdbc:sqlite:" + sqliteFile.getAbsolutePath();
+
+        // 尝试不同的表名（兼容旧版本）
+        String[] possibleTables = {tableName, "player_peach_health", "peach_health"};
+
+        try (Connection sqliteConn = DriverManager.getConnection(url)) {
+            // 先查找实际存在的表
+            String actualTable = null;
+            try (Statement stmt = sqliteConn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table'")) {
+                while (rs.next()) {
+                    String name = rs.getString("name");
+                    for (String possible : possibleTables) {
+                        if (possible.equals(name)) {
+                            actualTable = name;
+                            break;
+                        }
+                    }
+                    if (actualTable != null) break;
+                }
+            }
+
+            if (actualTable == null) {
+                plugin.getLogger().severe("SQLite 中未找到蟠桃数据表，尝试过的表名: " + String.join(", ", possibleTables));
+                return -1;
+            }
+
+            plugin.getLogger().info("找到 SQLite 表: " + actualTable);
+
+            // 读取数据
+            try (Statement stmt = sqliteConn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT uuid, username, peach_bonus, current_health FROM " + actualTable)) {
+                while (rs.next()) {
+                    data.add(new Object[]{
+                        rs.getString("uuid"),
+                        rs.getString("username"),
+                        rs.getDouble("peach_bonus"),
+                        rs.getDouble("current_health")
+                    });
+                }
+            }
+            plugin.getLogger().info("从 SQLite 读取了 " + data.size() + " 条记录");
+        } catch (SQLException e) {
+            plugin.getLogger().severe("读取 SQLite 数据失败: " + e.getMessage());
+            return -1;
+        }
+
+        if (data.isEmpty()) {
+            plugin.getLogger().info("SQLite 中无数据需要导入");
+            return 0;
+        }
+
+        // 写入 MySQL
+        writeAllData(data);
+        plugin.getLogger().info("成功导入 " + data.size() + " 条记录到 MySQL");
+        return data.size();
     }
+
 }

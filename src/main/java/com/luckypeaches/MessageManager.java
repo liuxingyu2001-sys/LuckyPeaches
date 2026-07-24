@@ -27,7 +27,33 @@ public class MessageManager {
             plugin.saveResource("messages.yml", false);
         }
         messagesConfig = YamlConfiguration.loadConfiguration(messagesFile);
+        mergeDefaultMessages();
         showPrefix = messagesConfig.getBoolean("show_prefix", true);
+    }
+
+    /**
+     * 合并默认消息，自动补全缺失的消息键
+     */
+    private void mergeDefaultMessages() {
+        YamlConfiguration defaultMessages = YamlConfiguration.loadConfiguration(
+            new java.io.InputStreamReader(plugin.getResource("messages.yml")));
+
+        boolean changed = false;
+        for (String key : defaultMessages.getKeys(true)) {
+            if (!messagesConfig.contains(key)) {
+                messagesConfig.set(key, defaultMessages.get(key));
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            try {
+                messagesConfig.save(messagesFile);
+                plugin.getLogger().info("已自动补全缺失的消息键");
+            } catch (java.io.IOException e) {
+                plugin.getLogger().severe("保存消息文件失败: " + e.getMessage());
+            }
+        }
     }
 
     public void reloadMessages() {

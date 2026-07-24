@@ -58,6 +58,9 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             case "db":
                 handleDatabase(sender, args);
                 break;
+            case "import":
+                handleImport(sender, args);
+                break;
             default:
                 sendHelp(sender);
                 break;
@@ -515,8 +518,8 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
                 java.util.List<Object[]> data = plugin.getDatabaseManager().readAllDataForMigration();
                 plugin.getLogger().info("已读取 " + data.size() + " 条记录，准备迁移到 " + typeName + "...");
 
-                // 3. 关闭旧数据库
-                plugin.getDatabaseManager().close();
+                // 3. 保存旧的 DatabaseManager 引用
+                com.luckypeaches.DatabaseManager oldDbManager = plugin.getDatabaseManager();
 
                 // 4. 修改 config
                 plugin.getConfig().set("settings.database.type", targetType);
@@ -533,8 +536,9 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
                     plugin.getLogger().info("数据迁移完成，共迁移 " + data.size() + " 条记录");
                 }
 
-                // 7. 替换 databaseManager
+                // 7. 替换 databaseManager 并关闭旧的
                 plugin.setDatabaseManager(newDbManager);
+                oldDbManager.close();
 
                 // 8. 重启 BackupManager
                 plugin.getBackupManager().shutdown();
@@ -565,6 +569,46 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         });
     }
 
+    private void handleImport(CommandSender sender, String[] args) {
+        if (!plugin.getDatabaseManager().isMysql()) {
+            sender.sendMessage(ChatColor.RED + "错误: 导入功能仅在 MySQL 模式下可用。");
+            return;
+        }
+
+        if (args.length < 2) {
+            sender.sendMessage(ChatColor.RED + "用法: /lp import <sqlite文件路径>");
+            sender.sendMessage(ChatColor.GRAY + "示例: /lp import plugins/LuckyPeaches/data.db");
+            return;
+        }
+
+        String filePath = args[1];
+        java.io.File sqliteFile = new java.io.File(filePath);
+
+        // 如果是相对路径，尝试从插件数据目录查找
+        if (!sqliteFile.exists()) {
+            sqliteFile = new java.io.File(plugin.getDataFolder(), filePath);
+        }
+
+        if (!sqliteFile.exists()) {
+            sender.sendMessage(ChatColor.RED + "错误: 文件不存在: " + filePath);
+            return;
+        }
+
+        final java.io.File finalFile = sqliteFile;
+        sender.sendMessage(ChatColor.YELLOW + "正在从 SQLite 导入数据...");
+
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            int count = plugin.getDatabaseManager().importFromSQLite(finalFile);
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                if (count >= 0) {
+                    sender.sendMessage(ChatColor.GREEN + "导入成功！共导入 " + count + " 条记录。");
+                } else {
+                    sender.sendMessage(ChatColor.RED + "导入失败，请查看控制台日志。");
+                }
+            });
+        });
+    }
+
     private void sendHelp(CommandSender sender) {
         plugin.getMessageManager().sendHelpMessage(sender);
     }
@@ -574,7 +618,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         if (!sender.hasPermission("luckypeach.admin")) return new ArrayList<>();
 
         if (args.length == 1) {
-            return Arrays.asList("give", "reload", "help", "gethealth", "sethealth", "backup", "world", "db").stream()
+            return Arrays.asList("give", "reload", "help", "gethealth", "sethealth", "backup", "world", "db", "import").stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
                     .collect(Collectors.toList());
         }

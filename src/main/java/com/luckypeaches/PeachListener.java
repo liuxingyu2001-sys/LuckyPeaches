@@ -1,6 +1,5 @@
 package com.luckypeaches;
 
-import java.util.HashSet;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
@@ -104,7 +103,7 @@ public class PeachListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         UUID playerId = player.getUniqueId();
-        
+
         // 检查玩家是否在屏蔽世界中
         final boolean isInDisabledWorld;
         if (plugin.getConfig().getBoolean("world_integration.enabled", true)) {
@@ -118,89 +117,23 @@ public class PeachListener implements Listener {
         } else {
             isInDisabledWorld = false;
         }
-        
-        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-            // 先迁移旧数据
-            plugin.getDatabaseManager().migrateFromPersistentData(player);
-            
-            // 加载玩家的蟠桃额外生命值数据
-            DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(playerId);
-            double peachBonus = healthData.getPeachBonus();
-            
-            // 在主线程中恢复玩家血量
-            plugin.getServer().getScheduler().runTask(plugin, () -> {
-                // 获取玩家当前的最大生命值
-                AttributeInstance maxHealthAttr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
-                if (maxHealthAttr != null) {
-                    double currentMaxHealth = maxHealthAttr.getBaseValue();
-                    double originalHealth = player.getHealth();
-                    double totalHealth = maxHealthAttr.getValue();
-                    
-                    // 记录详细日志
-                    if (plugin.isDebug()) {
-                        plugin.getLogger().info("玩家 " + player.getName() + " 登录: " +
-                            "数据库蟠桃加成=" + peachBonus + ", " +
-                            "当前基础生命值=" + currentMaxHealth + ", " +
-                            "当前总生命值=" + totalHealth + ", " +
-                            "当前血量=" + originalHealth);
-                    }
-                    
-                    // 如果不在屏蔽世界中，确保蟠桃加成与数据库一致
-                    if (!isInDisabledWorld) {
-                        // 读取玩家身上已有的蟠桃modifier值（由player.dat恢复）
-                        double currentModifierValue = 0;
-                        for (org.bukkit.attribute.AttributeModifier mod : maxHealthAttr.getModifiers()) {
-                            if (mod.getUniqueId().equals(PEACH_MODIFIER_UUID)) {
-                                currentModifierValue = mod.getAmount();
-                                break;
-                            }
-                        }
-                        
-                        // 仅在数据库值与当前modifier不一致时才更新（如离线被管理员修改）
-                        if (Math.abs(currentModifierValue - peachBonus) > 0.001) {
-                            if (plugin.isDebug()) {
-                                plugin.getLogger().info("玩家 " + player.getName() + " 蟠桃加成不一致: 当前=" 
-                                    + currentModifierValue + ", 数据库=" + peachBonus + "，执行更新");
-                            }
-                            
-                            // 在修改modifier前捕获当前血量，避免remove后血量被Minecraft截断
-                            double healthBeforeUpdate = player.getHealth();
-                            
-                            // 移除旧的蟠桃AttributeModifier
-                            maxHealthAttr.getModifiers().stream()
-                                .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
-                                .forEach(maxHealthAttr::removeModifier);
-                            
-                            if (peachBonus > 0) {
-                                // 添加新的蟠桃AttributeModifier
-                                org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                                    PEACH_MODIFIER_UUID,
-                                    "LuckyPeaches",
-                                    peachBonus,
-                                    org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
-                                );
-                                maxHealthAttr.addModifier(modifier);
-                            }
-                            
-                            // 恢复血量到新上限以内，避免modifier变更导致血量断崖
-                            player.setHealth(Math.min(healthBeforeUpdate, maxHealthAttr.getValue()));
-                        } else {
-                            if (plugin.isDebug()) {
-                                plugin.getLogger().info("玩家 " + player.getName() + " 蟠桃加成一致(" + peachBonus + ")，跳过更新");
-                            }
-                        }
-                    } else {
-                        if (plugin.isDebug()) {
-                            plugin.getLogger().info("玩家 " + player.getName() + " 在屏蔽世界中，不应用蟠桃加成");
-                        }
-                    }
-                    
-                    
-                    // 更新血条显示
-                    plugin.updateHealthScale(player);
-                }
-            });
-        });
+
+        // 屏蔽世界：移除 modifier
+        if (isInDisabledWorld) {
+            AttributeInstance maxHealthAttr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+            if (maxHealthAttr != null) {
+                maxHealthAttr.getModifiers().stream()
+                    .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
+                    .forEach(maxHealthAttr::removeModifier);
+            }
+            if (plugin.isDebug()) {
+                plugin.getLogger().info("玩家 " + player.getName() + " 在屏蔽世界中，移除蟠桃加成");
+            }
+        }
+        // 非屏蔽世界：信任 playerdata，不做任何操作
+
+        // 更新血条显示
+        plugin.updateHealthScale(player);
     }
 
     @EventHandler(priority = org.bukkit.event.EventPriority.HIGHEST)
@@ -304,14 +237,15 @@ public class PeachListener implements Listener {
         // 判定概率
         if (random.nextDouble() <= config.chance) {
             eatingPlayers.add(playerId);
-            // 异步读取数据库中的peach_bonus
+            // 主线程捕获当前血量，异步保存数据库
+            final double currentHealth = player.getHealth();
             plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+                try {
                 DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(player.getUniqueId());
                 double currentPeachBonus = healthData.getPeachBonus();
                 double newPeachBonus = currentPeachBonus + config.healthBonus;
                 
                 // 保存新的peach_bonus
-                double currentHealth = player.getHealth();
                 plugin.getDatabaseManager().savePlayerData(player.getUniqueId(), player.getName(), newPeachBonus, currentHealth);
                 
                 // 在主线程中应用peach_bonus
@@ -320,6 +254,9 @@ public class PeachListener implements Listener {
                         // 使用AttributeModifier应用peach_bonus，不修改基础生命值
                         AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
                         if (attr != null && player.isOnline()) {
+                            // 保存当前血量，防止移除 modifier 时被截断
+                            double healthBefore = player.getHealth();
+
                             // 移除旧的蟠桃AttributeModifier
                             attr.getModifiers().stream()
                                 .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
@@ -334,8 +271,8 @@ public class PeachListener implements Listener {
                             );
                             attr.addModifier(modifier);
 
-                            // 同步增加当前血量，避免满血玩家吃完蟠桃后因最大血量变大而"不满血"触发受伤动画
-                            double newCurrentHealth = Math.min(player.getHealth() + config.healthBonus, attr.getValue());
+                            // 恢复血量到新上限以内
+                            double newCurrentHealth = Math.min(healthBefore + config.healthBonus, attr.getValue());
                             player.setHealth(newCurrentHealth);
 
                             // 更新缩放
@@ -366,6 +303,10 @@ public class PeachListener implements Listener {
                         eatingPlayers.remove(playerId);
                     }
                 });
+                } catch (Exception e) {
+                    plugin.getLogger().severe("吃桃处理失败: " + e.getMessage());
+                    eatingPlayers.remove(playerId);
+                }
             });
         } else {
             // 失败音效
@@ -461,7 +402,8 @@ public class PeachListener implements Listener {
 
                 final double newPeachBonus = Math.max(0, currentPeachBonus - penalty);
 
-                plugin.getDatabaseManager().savePlayerData(playerId, player.getName(), newPeachBonus, 0);
+                // 暂存惩罚信息，延迟恢复时再保存正确的 current_health
+                plugin.getDatabaseManager().savePlayerData(playerId, player.getName(), newPeachBonus);
 
                 long restoreDelay = plugin.getConfig().getLong("settings.death_penalty.restore_delay_ticks", 2L);
                 plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
@@ -486,6 +428,9 @@ public class PeachListener implements Listener {
                         // 确保当前血量不超过新上限
                         player.setHealth(Math.min(player.getHealth(), attr.getValue()));
 
+                        // 用正确的 current_health 更新数据库
+                        plugin.getDatabaseManager().savePlayerData(playerId, player.getName(), newPeachBonus, player.getHealth());
+
                         String penaltyMsg = plugin.getMessageManager().getPrefixedMessage("death_penalty");
                         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
                             String.format(penaltyMsg, finalPenalty, newPeachBonus)));
@@ -503,7 +448,6 @@ public class PeachListener implements Listener {
     @EventHandler(priority = org.bukkit.event.EventPriority.HIGHEST)
     public void onPlayerChangedWorld(PlayerChangedWorldEvent event) {
         Player player = event.getPlayer();
-        String oldWorld = event.getFrom().getName();
         String newWorld = player.getWorld().getName();
         
         if (!plugin.getConfig().getBoolean("world_integration.enabled", true)) {

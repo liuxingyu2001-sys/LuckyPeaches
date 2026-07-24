@@ -49,4 +49,5 @@ help:
   - "&e/lp world <add|remove|list> [世界] &7- 管理屏蔽世界列表"
   - "&e/lp world <setmax|getmax|listmax|removemax> [世界] [数值] &7- 管理世界最大生命值"
   - "&e/lp db <mysql|sqlite|status> &7- 切换数据库类型"
+  - "&e/lp import <sqlite文件> &7- 导入旧 SQLite 数据到 MySQL"
   - "&e/lp help &7- 查看此帮助"

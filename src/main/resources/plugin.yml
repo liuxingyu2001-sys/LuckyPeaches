@@ -4,6 +4,9 @@ version: ${project.version}
 main: com.luckypeaches.LuckyPeaches
 api-version: 1.13
 softdepend: [PlaceholderAPI]
+libraries:
+  - mysql:mysql-connector-java:8.0.33
+  - com.zaxxer:HikariCP:5.1.0
 commands:
   luckypeach:
     aliases: [luckyp, lp]

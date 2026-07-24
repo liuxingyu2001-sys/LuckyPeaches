@@ -18,7 +18,8 @@ public class LuckyPeaches extends JavaPlugin {
     public void onEnable() {
         instance = this;
         saveDefaultConfig();
-        
+        mergeDefaultConfig();
+
         licenseManager = new LicenseManager(this);
         licenseManager.loadConfig();
         
@@ -29,6 +30,34 @@ public class LuckyPeaches extends JavaPlugin {
         licenseValid = true;
         getLogger().info("授权验证已跳过（开发模式）");
         initializePlugin();
+    }
+
+    /**
+     * 合并默认配置，自动补全缺失的配置键
+     */
+    private void mergeDefaultConfig() {
+        org.bukkit.configuration.file.YamlConfiguration defaultConfig =
+            org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(
+                new java.io.InputStreamReader(getResource("config.yml")));
+
+        org.bukkit.configuration.ConfigurationSection currentConfig = getConfig();
+        boolean changed = false;
+
+        for (String key : defaultConfig.getKeys(true)) {
+            if (!currentConfig.contains(key)) {
+                currentConfig.set(key, defaultConfig.get(key));
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            try {
+                getConfig().save(new java.io.File(getDataFolder(), "config.yml"));
+                getLogger().info("已自动补全缺失的配置键");
+            } catch (java.io.IOException e) {
+                getLogger().severe("保存配置失败: " + e.getMessage());
+            }
+        }
     }
     
     private void initializePlugin() {
@@ -42,6 +71,44 @@ public class LuckyPeaches extends JavaPlugin {
         
         this.databaseManager = new DatabaseManager(this);
         this.databaseManager.initialize();
+
+        // MySQL 模式：从代理端同步配置
+        if (databaseManager.isMysql()) {
+            getLogger().info("正在从代理端同步配置...");
+            String configData = databaseManager.loadConfigFromDatabase();
+            if (configData != null) {
+                getLogger().info("已获取代理端配置数据，长度: " + configData.length());
+                org.bukkit.configuration.file.YamlConfiguration mysqlConfig =
+                    org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(
+                        new java.io.StringReader(configData));
+                // 检查 peaches 配置
+                if (mysqlConfig.contains("peaches")) {
+                    getLogger().info("代理端配置包含 peaches 节，键数量: " +
+                        mysqlConfig.getConfigurationSection("peaches").getKeys(false).size());
+                } else {
+                    getLogger().warning("代理端配置不包含 peaches 节！");
+                }
+                // 保存本地数据库配置（完整的 settings.database 部分）
+                org.bukkit.configuration.ConfigurationSection localDbSection =
+                    getConfig().getConfigurationSection("settings.database");
+                // 合并配置
+                for (String key : mysqlConfig.getKeys(true)) {
+                    // 跳过 database 相关配置，保留本地的
+                    if (key.startsWith("database.") || key.equals("database")
+                        || key.startsWith("settings.database.") || key.equals("settings.database")) {
+                        continue;
+                    }
+                    getConfig().set(key, mysqlConfig.get(key));
+                }
+                // 恢复本地数据库配置
+                if (localDbSection != null) {
+                    getConfig().set("settings.database", localDbSection);
+                }
+                getLogger().info("已从代理端同步配置");
+            } else {
+                getLogger().warning("MySQL 中无配置数据，使用本地配置");
+            }
+        }
         
         this.backupManager = new BackupManager(this);
         this.backupManager.initialize();
@@ -164,28 +231,49 @@ public class LuckyPeaches extends JavaPlugin {
             DatabaseManager.PlayerHealthData data = databaseManager.loadCompletePlayerData(player.getUniqueId());
             double peachBonus = data.getPeachBonus();
 
-            if (peachBonus > 0) {
-                org.bukkit.attribute.AttributeInstance maxHealthAttr =
-                    player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
-                if (maxHealthAttr != null) {
-                    // 移除旧 modifier
-                    maxHealthAttr.getModifiers().stream()
-                        .filter(mod -> mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
-                        .forEach(maxHealthAttr::removeModifier);
+            org.bukkit.attribute.AttributeInstance maxHealthAttr =
+                player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+            if (maxHealthAttr == null) continue;
 
-                    // 添加新 modifier
-                    org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                        PeachListener.PEACH_MODIFIER_UUID,
-                        "LuckyPeaches",
-                        peachBonus,
-                        org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
-                    );
-                    maxHealthAttr.addModifier(modifier);
+            // 检查当前 modifier 值是否已正确
+            double currentModifierValue = 0;
+            for (org.bukkit.attribute.AttributeModifier mod : maxHealthAttr.getModifiers()) {
+                if (mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID)) {
+                    currentModifierValue = mod.getAmount();
+                    break;
                 }
-
-                // 应用血量缩放
-                updateHealthScale(player);
             }
+
+            // 值一致则跳过，避免不必要的 remove/add 触发受伤动画
+            if (Math.abs(currentModifierValue - peachBonus) < 0.001) {
+                updateHealthScale(player);
+                continue;
+            }
+
+            // 保存当前血量，防止移除 modifier 时被 Minecraft 截断
+            double healthBefore = player.getHealth();
+
+            // 移除旧 modifier
+            maxHealthAttr.getModifiers().stream()
+                .filter(mod -> mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
+                .forEach(maxHealthAttr::removeModifier);
+
+            // 添加新 modifier
+            if (peachBonus > 0) {
+                org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
+                    PeachListener.PEACH_MODIFIER_UUID,
+                    "LuckyPeaches",
+                    peachBonus,
+                    org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
+                );
+                maxHealthAttr.addModifier(modifier);
+            }
+
+            // 恢复血量到新上限以内，避免受伤动画
+            player.setHealth(Math.min(healthBefore, maxHealthAttr.getValue()));
+
+            // 应用血量缩放
+            updateHealthScale(player);
         }
     }
 
