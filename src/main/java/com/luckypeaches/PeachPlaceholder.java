@@ -3,8 +3,6 @@ package com.luckypeaches;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import org.bukkit.entity.Player;
 
-import java.util.UUID;
-
 public class PeachPlaceholder extends PlaceholderExpansion {
 
     private final LuckyPeaches plugin;
