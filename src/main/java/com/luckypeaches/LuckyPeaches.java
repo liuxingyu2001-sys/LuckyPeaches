@@ -1,16 +1,13 @@
 package com.luckypeaches;
 
 import org.bukkit.plugin.java.JavaPlugin;
-import com.luckypeaches.license.LicenseManager;
 
 public class LuckyPeaches extends JavaPlugin {
     private static LuckyPeaches instance;
     private PeachManager peachManager;
     private DatabaseManager databaseManager;
     private BackupManager backupManager;
-    private LicenseManager licenseManager;
     private MessageManager messageManager;
-    private boolean licenseValid = false;
     private boolean pluginInitialized = false;
     private boolean debug = false;
 
@@ -20,15 +17,10 @@ public class LuckyPeaches extends JavaPlugin {
         saveDefaultConfig();
         mergeDefaultConfig();
 
-        licenseManager = new LicenseManager(this);
-        licenseManager.loadConfig();
-        
         PeachCommand cmd = new PeachCommand(this);
         getCommand("luckypeach").setExecutor(cmd);
         getCommand("luckypeach").setTabCompleter(cmd);
-        
-        licenseValid = true;
-        getLogger().info("授权验证已跳过（开发模式）");
+
         initializePlugin();
     }
 
@@ -130,15 +122,9 @@ public class LuckyPeaches extends JavaPlugin {
         pluginInitialized = true;
     }
     
-    public void initializePluginAfterLicense() {
-        getServer().getScheduler().runTask(this, () -> {
-            initializePlugin();
-        });
-    }
-
     @Override
     public void onDisable() {
-        if (!licenseValid || !pluginInitialized) {
+        if (!pluginInitialized) {
             return;
         }
         
@@ -201,18 +187,6 @@ public class LuckyPeaches extends JavaPlugin {
 
     public BackupManager getBackupManager() {
         return backupManager;
-    }
-    
-    public LicenseManager getLicenseManager() {
-        return licenseManager;
-    }
-    
-    public boolean isLicenseValid() {
-        return licenseValid;
-    }
-    
-    public void setLicenseValid(boolean valid) {
-        this.licenseValid = valid;
     }
     
     public boolean isDebug() {

@@ -69,42 +69,10 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
     }
 
     private void handleReload(CommandSender sender, String[] args) {
-        if (args.length > 1 && args[1].equalsIgnoreCase("license")) {
-            reloadLicense(sender);
-            return;
-        }
-        
         plugin.reloadConfig();
         plugin.getPeachManager().loadPeaches();
         plugin.getMessageManager().reloadMessages();
         sender.sendMessage(plugin.getMessageManager().getPrefixedMessage("reload_success"));
-    }
-    
-    private void reloadLicense(CommandSender sender) {
-        sender.sendMessage(ChatColor.YELLOW + "正在重新验证授权...");
-        
-        boolean wasInvalid = !plugin.isLicenseValid();
-        
-        plugin.getLicenseManager().reloadConfig();
-        plugin.getLicenseManager().verifyLicense().thenAccept(result -> {
-            if (result.isSuccess()) {
-                plugin.setLicenseValid(true);
-                sender.sendMessage(ChatColor.GREEN + "✓ 授权验证成功！");
-                sender.sendMessage(ChatColor.GREEN + "密钥: " + plugin.getLicenseManager().getLicenseKey());
-                
-                if (wasInvalid) {
-                    sender.sendMessage(ChatColor.GREEN + "正在初始化插件功能...");
-                    plugin.initializePluginAfterLicense();
-                }
-            } else {
-                plugin.setLicenseValid(false);
-                sender.sendMessage(ChatColor.RED + "✗ 授权验证失败！");
-                sender.sendMessage(ChatColor.RED + "错误: " + result.getMessage());
-            }
-        }).exceptionally(throwable -> {
-            sender.sendMessage(ChatColor.RED + "授权验证发生异常: " + throwable.getMessage());
-            return null;
-        });
     }
 
     private void handleGetHealth(CommandSender sender, String[] args) {
@@ -632,12 +600,6 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 2 && args[0].equalsIgnoreCase("backup")) {
             return Arrays.asList("now", "list", "enable", "disable").stream()
-                    .filter(s -> s.startsWith(args[1].toLowerCase()))
-                    .collect(Collectors.toList());
-        }
-
-        if (args.length == 2 && args[0].equalsIgnoreCase("reload")) {
-            return Arrays.asList("license").stream()
                     .filter(s -> s.startsWith(args[1].toLowerCase()))
                     .collect(Collectors.toList());
         }
