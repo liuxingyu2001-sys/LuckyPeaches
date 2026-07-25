@@ -57,6 +57,7 @@ public class MessageManager {
     public void reloadMessages() {
         messagesFile = new File(plugin.getDataFolder(), "messages.yml");
         messagesConfig = YamlConfiguration.loadConfiguration(messagesFile);
+        mergeDefaultMessages();
         showPrefix = messagesConfig.getBoolean("show_prefix", true);
     }
 

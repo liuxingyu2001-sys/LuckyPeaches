@@ -476,47 +476,64 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_switching",
             "%type%", typeName));
 
+        // 在主线程捕获所有在线玩家数据，避免异步线程调用 Bukkit API
+        final java.util.Map<UUID, String> playerNameSnapshot = new java.util.LinkedHashMap<>();
+        final java.util.Map<UUID, Double> playerHealthSnapshot = new java.util.LinkedHashMap<>();
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            playerNameSnapshot.put(p.getUniqueId(), p.getName());
+            playerHealthSnapshot.put(p.getUniqueId(), p.getHealth());
+        }
+
         // 异步执行迁移
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
-                // 1. 保存所有在线玩家数据到旧数据库
-                plugin.saveAllOnlinePlayers();
+                // 1. 使用主线程捕获的数据保存所有在线玩家
+                com.luckypeaches.DatabaseManager oldDbManager = plugin.getDatabaseManager();
+                for (java.util.Map.Entry<UUID, Double> entry : playerHealthSnapshot.entrySet()) {
+                    UUID playerId = entry.getKey();
+                    double health = entry.getValue();
+                    DatabaseManager.PlayerHealthData hd = oldDbManager.loadCompletePlayerData(playerId);
+                    oldDbManager.savePlayerData(playerId, playerNameSnapshot.get(playerId), hd.getPeachBonus(), health);
+                }
 
                 // 2. 读取当前全部数据
-                java.util.List<Object[]> data = plugin.getDatabaseManager().readAllDataForMigration();
+                java.util.List<Object[]> data = oldDbManager.readAllDataForMigration();
                 plugin.getLogger().info("已读取 " + data.size() + " 条记录，准备迁移到 " + typeName + "...");
 
-                // 3. 保存旧的 DatabaseManager 引用
-                com.luckypeaches.DatabaseManager oldDbManager = plugin.getDatabaseManager();
-
-                // 4. 修改 config
+                // 3. 修改 config
                 plugin.getConfig().set("settings.database.type", targetType);
                 plugin.saveConfig();
                 plugin.reloadConfig();
 
-                // 5. 创建新的 DatabaseManager 并初始化
+                // 4. 创建新的 DatabaseManager 并初始化
                 com.luckypeaches.DatabaseManager newDbManager = new com.luckypeaches.DatabaseManager(plugin);
                 newDbManager.initialize();
 
-                // 6. 写入数据到新数据库
+                // 5. 写入数据到新数据库
                 if (!data.isEmpty()) {
                     newDbManager.writeAllData(data);
                     plugin.getLogger().info("数据迁移完成，共迁移 " + data.size() + " 条记录");
                 }
 
-                // 7. 替换 databaseManager 并关闭旧的
+                // 6. 替换 databaseManager 并关闭旧的
                 plugin.setDatabaseManager(newDbManager);
                 oldDbManager.close();
 
-                // 8. 重启 BackupManager
+                // 7. 重启 BackupManager
                 plugin.getBackupManager().shutdown();
                 plugin.setBackupManager(new com.luckypeaches.BackupManager(plugin));
                 plugin.getBackupManager().initialize();
 
+                // 8. 预加载所有在线玩家的蟠桃加成（异步，不阻塞主线程）
+                java.util.Map<UUID, Double> bonuses = new java.util.LinkedHashMap<>();
+                for (UUID playerId : playerNameSnapshot.keySet()) {
+                    bonuses.put(playerId, newDbManager.loadPlayerData(playerId));
+                }
+
                 // 9. 主线程重新应用 modifier
                 final int count = data.size();
                 plugin.getServer().getScheduler().runTask(plugin, () -> {
-                    plugin.reapplyModifiersForOnlinePlayers();
+                    plugin.reapplyModifiersForOnlinePlayers(bonuses);
                     if (count > 0) {
                         sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_switch_success",
                             "%type%", typeName,

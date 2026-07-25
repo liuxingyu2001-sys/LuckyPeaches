@@ -1,0 +1,9 @@
+{
+  "id": "luckypeaches-proxy",
+  "name": "LuckyPeaches-Proxy",
+  "version": "1.0",
+  "description": "LuckyPeaches proxy plugin for Velocity",
+  "authors": ["liuxingyu2001"],
+  "main": "com.luckypeaches.proxy.LuckyPeachesProxy",
+  "dependencies": []
+}

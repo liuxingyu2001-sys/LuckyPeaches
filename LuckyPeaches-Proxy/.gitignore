@@ -1,0 +1,5 @@
+target/
+.mimocode/
+*.iml
+.idea/
+*.class

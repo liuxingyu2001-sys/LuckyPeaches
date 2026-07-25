@@ -237,16 +237,17 @@ public class PeachListener implements Listener {
         // 判定概率
         if (random.nextDouble() <= config.chance) {
             eatingPlayers.add(playerId);
-            // 主线程捕获当前血量，异步保存数据库
+            // 主线程捕获当前血量和玩家名，异步保存数据库
             final double currentHealth = player.getHealth();
+            final String playerName = player.getName();
             plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
                 try {
-                DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(player.getUniqueId());
+                DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(playerId);
                 double currentPeachBonus = healthData.getPeachBonus();
                 double newPeachBonus = currentPeachBonus + config.healthBonus;
-                
+
                 // 保存新的peach_bonus
-                plugin.getDatabaseManager().savePlayerData(player.getUniqueId(), player.getName(), newPeachBonus, currentHealth);
+                plugin.getDatabaseManager().savePlayerData(playerId, playerName, newPeachBonus, currentHealth);
                 
                 // 在主线程中应用peach_bonus
                 plugin.getServer().getScheduler().runTask(plugin, () -> {
@@ -330,7 +331,6 @@ public class PeachListener implements Listener {
             String formattedPeachHealth = String.format("%.1f", currentPeachBonus);
             player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("fail",
                 "%peach_health%", formattedPeachHealth));
-            eatingPlayers.remove(playerId);
         }
     }
 
@@ -375,26 +375,25 @@ public class PeachListener implements Listener {
         lastDeathTime.put(playerId, currentTime);
 
         double healthThreshold = plugin.getConfig().getDouble("settings.death_penalty.health_threshold", 50.0);
-        
+
         double[] penaltyConfig = getPenaltyConfig(player);
         double penaltyPercentage = penaltyConfig[0];
         double minPenalty = penaltyConfig[1];
         double maxPenalty = penaltyConfig[2];
-        
+
+        final String playerName = player.getName();
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-            pendingDeathPenalty.add(playerId);
             try {
                 DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(playerId);
                 double currentPeachBonus = healthData.getPeachBonus();
 
                 // 检查蟠桃加成是否超过阈值（而不是检查总生命值）
-                if (currentPeachBonus <= healthThreshold) {
+                if (currentPeachBonus <= healthThreshold || currentPeachBonus <= 0) {
                     return;
                 }
 
-                if (currentPeachBonus <= 0) {
-                    return;
-                }
+                // 确认需要扣罚后才标记，避免提前 return 导致标记残留
+                pendingDeathPenalty.add(playerId);
 
                 double penalty = currentPeachBonus * penaltyPercentage;
                 penalty = Math.max(minPenalty, Math.min(maxPenalty, penalty));
@@ -403,41 +402,44 @@ public class PeachListener implements Listener {
                 final double newPeachBonus = Math.max(0, currentPeachBonus - penalty);
 
                 // 暂存惩罚信息，延迟恢复时再保存正确的 current_health
-                plugin.getDatabaseManager().savePlayerData(playerId, player.getName(), newPeachBonus);
+                plugin.getDatabaseManager().savePlayerData(playerId, playerName, newPeachBonus);
 
                 long restoreDelay = plugin.getConfig().getLong("settings.death_penalty.restore_delay_ticks", 2L);
                 plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-                    if (!player.isOnline()) return;
-                    AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
-                    if (attr != null) {
-                        attr.getModifiers().stream()
-                            .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
-                            .forEach(attr::removeModifier);
+                    try {
+                        if (!player.isOnline()) return;
+                        AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+                        if (attr != null) {
+                            attr.getModifiers().stream()
+                                .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
+                                .forEach(attr::removeModifier);
 
-                        if (newPeachBonus > 0) {
-                            org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                                PEACH_MODIFIER_UUID,
-                                "LuckyPeaches",
-                                newPeachBonus,
-                                org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
-                            );
-                            attr.addModifier(modifier);
+                            if (newPeachBonus > 0) {
+                                org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
+                                    PEACH_MODIFIER_UUID,
+                                    "LuckyPeaches",
+                                    newPeachBonus,
+                                    org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
+                                );
+                                attr.addModifier(modifier);
+                            }
+
+                            plugin.updateHealthScale(player);
+                            player.setHealth(Math.min(player.getHealth(), attr.getValue()));
+
+                            plugin.getDatabaseManager().savePlayerData(playerId, player.getName(), newPeachBonus, player.getHealth());
+
+                            String penaltyMsg = plugin.getMessageManager().getPrefixedMessage("death_penalty");
+                            player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                                String.format(penaltyMsg, finalPenalty, newPeachBonus)));
                         }
-
-                        plugin.updateHealthScale(player);
-                        // 确保当前血量不超过新上限
-                        player.setHealth(Math.min(player.getHealth(), attr.getValue()));
-
-                        // 用正确的 current_health 更新数据库
-                        plugin.getDatabaseManager().savePlayerData(playerId, player.getName(), newPeachBonus, player.getHealth());
-
-                        String penaltyMsg = plugin.getMessageManager().getPrefixedMessage("death_penalty");
-                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            String.format(penaltyMsg, finalPenalty, newPeachBonus)));
+                    } finally {
+                        pendingDeathPenalty.remove(playerId);
                     }
                 }, restoreDelay);
-            } finally {
+            } catch (Exception e) {
                 pendingDeathPenalty.remove(playerId);
+                plugin.getLogger().severe("死亡惩罚处理失败: " + e.getMessage());
             }
         });
     }

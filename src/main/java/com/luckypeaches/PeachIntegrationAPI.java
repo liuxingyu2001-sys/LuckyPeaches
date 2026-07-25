@@ -95,8 +95,8 @@ public class PeachIntegrationAPI {
     }
 
     /**
-     * 清理玩家身上所有非蟠桃插件的血量加成
-     * 只保留装备和蟠桃插件的modifier
+     * 清理玩家身上所有非蟠桃插件的血量加成 modifier
+     * 注意：此方法会移除除蟠桃插件以外的所有 AttributeModifier（包括装备、药水等），请谨慎使用
      */
     public static void clearNonPeachModifiers(Player player) {
         if (player == null || !player.isOnline()) {

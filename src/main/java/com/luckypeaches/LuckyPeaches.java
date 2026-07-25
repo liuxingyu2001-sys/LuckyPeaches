@@ -198,18 +198,17 @@ public class LuckyPeaches extends JavaPlugin {
     }
 
     /**
-     * 重新对所有在线玩家应用 modifier
+     * 使用预加载的数据重新对所有在线玩家应用 modifier（主线程调用，不阻塞数据库）
      */
-    public void reapplyModifiersForOnlinePlayers() {
+    public void reapplyModifiersForOnlinePlayers(java.util.Map<java.util.UUID, Double> preloadedBonuses) {
         for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {
-            DatabaseManager.PlayerHealthData data = databaseManager.loadCompletePlayerData(player.getUniqueId());
-            double peachBonus = data.getPeachBonus();
+            Double peachBonus = preloadedBonuses.get(player.getUniqueId());
+            if (peachBonus == null) continue;
 
             org.bukkit.attribute.AttributeInstance maxHealthAttr =
                 player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
             if (maxHealthAttr == null) continue;
 
-            // 检查当前 modifier 值是否已正确
             double currentModifierValue = 0;
             for (org.bukkit.attribute.AttributeModifier mod : maxHealthAttr.getModifiers()) {
                 if (mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID)) {
@@ -218,21 +217,17 @@ public class LuckyPeaches extends JavaPlugin {
                 }
             }
 
-            // 值一致则跳过，避免不必要的 remove/add 触发受伤动画
             if (Math.abs(currentModifierValue - peachBonus) < 0.001) {
                 updateHealthScale(player);
                 continue;
             }
 
-            // 保存当前血量，防止移除 modifier 时被 Minecraft 截断
             double healthBefore = player.getHealth();
 
-            // 移除旧 modifier
             maxHealthAttr.getModifiers().stream()
                 .filter(mod -> mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
                 .forEach(maxHealthAttr::removeModifier);
 
-            // 添加新 modifier
             if (peachBonus > 0) {
                 org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
                     PeachListener.PEACH_MODIFIER_UUID,
@@ -243,12 +238,30 @@ public class LuckyPeaches extends JavaPlugin {
                 maxHealthAttr.addModifier(modifier);
             }
 
-            // 恢复血量到新上限以内，避免受伤动画
             player.setHealth(Math.min(healthBefore, maxHealthAttr.getValue()));
-
-            // 应用血量缩放
             updateHealthScale(player);
         }
+    }
+
+    /**
+     * 异步加载数据后重新对所有在线玩家应用 modifier
+     */
+    public void reapplyModifiersForOnlinePlayers() {
+        java.util.Set<java.util.UUID> onlineIds = new java.util.LinkedHashSet<>();
+        for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {
+            onlineIds.add(player.getUniqueId());
+        }
+
+        getServer().getScheduler().runTaskAsynchronously(this, () -> {
+            java.util.Map<java.util.UUID, Double> bonuses = new java.util.LinkedHashMap<>();
+            for (java.util.UUID id : onlineIds) {
+                bonuses.put(id, databaseManager.loadPlayerData(id));
+            }
+
+            getServer().getScheduler().runTask(this, () -> {
+                reapplyModifiersForOnlinePlayers(bonuses);
+            });
+        });
     }
 
     public void updateHealthScale(org.bukkit.entity.Player player) {

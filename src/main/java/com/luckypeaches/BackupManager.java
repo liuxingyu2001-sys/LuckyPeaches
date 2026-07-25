@@ -35,9 +35,8 @@ public class BackupManager {
         int intervalHours = plugin.getConfig().getInt("settings.database_backup.backup_interval_hours", 24);
         long intervalTicks = intervalHours * 60 * 60 * 20L;
 
-        backupTaskId = plugin.getServer().getScheduler().scheduleSyncRepeatingTask(plugin, () -> {
-            plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::backupDatabase);
-        }, intervalTicks, intervalTicks);
+        backupTaskId = plugin.getServer().getScheduler().runTaskTimerAsynchronously(plugin,
+            this::backupDatabase, intervalTicks, intervalTicks).getTaskId();
 
         plugin.getLogger().info("数据库自动备份已启用，间隔: " + intervalHours + " 小时");
     }

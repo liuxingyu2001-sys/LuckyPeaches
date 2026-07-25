@@ -4,17 +4,17 @@
 
 Two Minecraft plugins sharing one workspace:
 
-- **LuckyPeaches** (`/home/plugins/LuckyPeaches/`) — Spigot/Paper backend plugin (Java 17, Maven). Eating peach items permanently boosts max health via `AttributeModifier`. Features: multi-world isolation, death penalty, SQLite/MySQL dual-database, PlaceholderAPI, CraftEngine custom models, health scaling.
-- **LuckyPeaches-Proxy** (`/home/plugins/LuckyPeaches-Proxy/`) — Velocity proxy plugin. Stores full config in MySQL so backend servers sync settings on startup.
+- **LuckyPeaches** (repo root) — Spigot/Paper backend plugin (Java 17, Maven). Eating peach items permanently boosts max health via `AttributeModifier`. Features: multi-world isolation, death penalty, SQLite/MySQL dual-database, PlaceholderAPI, CraftEngine custom models, health scaling.
+- **LuckyPeaches-Proxy** (`LuckyPeaches-Proxy/`) — Velocity proxy plugin. Stores full config in MySQL so backend servers sync settings on startup.
 
 ## Build
 
 ```sh
 # Backend
-cd /home/plugins/LuckyPeaches && mvn package
+mvn package
 
 # Proxy
-cd /home/plugins/LuckyPeaches-Proxy && mvn package
+cd LuckyPeaches-Proxy && mvn package
 ```
 
 Output: `target/Liu-<artifactId>-<version>.jar` (custom `<finalName>` in each pom.xml).
@@ -25,9 +25,9 @@ Output: `target/Liu-<artifactId>-<version>.jar` (custom `<finalName>` in each po
 
 ```sh
 # Backend jars
-cp LuckyPeaches/target/Liu-LuckyPeaches-*.jar /home/test/test1/plugins/
-cp LuckyPeaches/target/Liu-LuckyPeaches-*.jar /home/test/test2/plugins/
-cp LuckyPeaches/target/Liu-LuckyPeaches-*.jar /home/p/          # production
+cp target/Liu-LuckyPeaches-*.jar /home/test/test1/plugins/
+cp target/Liu-LuckyPeaches-*.jar /home/test/test2/plugins/
+cp target/Liu-LuckyPeaches-*.jar /home/p/          # production
 
 # Proxy jar
 cp LuckyPeaches-Proxy/target/Liu-LuckyPeaches-Proxy-*.jar /home/test/vel/plugins/
@@ -49,7 +49,7 @@ cp LuckyPeaches-Proxy/target/Liu-LuckyPeaches-Proxy-*.jar /home/test/vel/plugins
 | `PeachPlaceholder.java` | PlaceholderAPI expansion. Reads from AttributeModifier (no DB call). |
 | `PeachIntegrationAPI.java` | Public API for other plugins (battle disable/restore). |
 
-### Proxy (`../LuckyPeaches-Proxy/src/main/java/com/luckypeaches/proxy/`)
+### Proxy (`LuckyPeaches-Proxy/src/main/java/com/luckypeaches/proxy/`)
 
 | File | Role |
 |------|------|
