@@ -1,4 +1,4 @@
-# AGENTS.md
+# QWEN.md
 
 ## What this is
 
@@ -39,7 +39,7 @@ cp LuckyPeaches-Proxy/target/Liu-LuckyPeaches-Proxy-*.jar /home/test/vel/plugins
 
 | File | Role |
 |------|------|
-| `LuckyPeaches.java` | Entrypoint. License check bypassed at line 30. `mergeDefaultConfig()` runs before MySQL sync. |
+| `LuckyPeaches.java` | Entrypoint. `mergeDefaultConfig()` runs before MySQL sync. |
 | `PeachListener.java` | Core logic — join/quit/interact/death/world-change handlers. `PEACH_MODIFIER_UUID`, `WORLD_MAX_HEALTH_MODIFIER_UUID` constants. `eatingPlayers` set guards async eat. |
 | `PeachManager.java` | Peach item creation, CraftEngine integration with vanilla fallback. |
 | `DatabaseManager.java` | Dual SQLite/MySQL. `executeQuery(DBAction)` callback pattern handles connection lifecycle. |
@@ -48,7 +48,6 @@ cp LuckyPeaches-Proxy/target/Liu-LuckyPeaches-Proxy-*.jar /home/test/vel/plugins
 | `MessageManager.java` | i18n from `messages.yml`. `&` color codes. |
 | `PeachPlaceholder.java` | PlaceholderAPI expansion. Reads from AttributeModifier (no DB call). |
 | `PeachIntegrationAPI.java` | Public API for other plugins (battle disable/restore). |
-| `license/LicenseManager.java` | License verification (bypassed in `LuckyPeaches.java:30`). |
 
 ### Proxy (`../LuckyPeaches-Proxy/src/main/java/com/luckypeaches/proxy/`)
 
