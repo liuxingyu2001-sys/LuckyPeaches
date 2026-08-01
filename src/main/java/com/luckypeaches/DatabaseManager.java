@@ -52,7 +52,6 @@ public class DatabaseManager {
     private final LuckyPeaches plugin;
     private final boolean useMysql;
     private final String tableName;
-    private final String configTableName;
     private final File sqliteFile;
     private Connection sqliteConnection;
     private HikariDataSource hikariPool;
@@ -64,7 +63,6 @@ public class DatabaseManager {
             plugin.getConfig().getString("settings.database.type", "sqlite"));
         String prefix = plugin.getConfig().getString("settings.database.mysql.table_prefix", "lp_");
         this.tableName = prefix + "player_peach_health";
-        this.configTableName = prefix + "config";
         this.sqliteFile = new File(plugin.getDataFolder(), "data.db");
     }
 
@@ -215,22 +213,6 @@ public class DatabaseManager {
             }
             return null;
         });
-
-        // 创建配置同步表（MySQL 模式）
-        if (useMysql) {
-            String configSql = "CREATE TABLE IF NOT EXISTS " + configTableName + " (" +
-                              "id INT PRIMARY KEY DEFAULT 1, " +
-                              "config_data LONGTEXT, " +
-                              "server_name VARCHAR(64), " +
-                              "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" +
-                              ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
-            executeQuery(conn -> {
-                try (Statement stmt = conn.createStatement()) {
-                    stmt.execute(configSql);
-                }
-                return null;
-            });
-        }
     }
 
     // ========== 迁移 ==========
@@ -428,38 +410,6 @@ public class DatabaseManager {
 
             return 0;
         }
-    }
-
-    // ========== 配置同步 ==========
-
-    /**
-     * 从 MySQL 加载配置（代理端同步）
-     * @return 配置数据字符串，失败返回 null
-     */
-    public String loadConfigFromDatabase() {
-        if (!useMysql) return null;
-
-        String sql = "SELECT config_data, server_name FROM " + configTableName + " WHERE id = 1";
-
-        synchronized (dbLock) {
-            try {
-                return executeQuery(conn -> {
-                    try (PreparedStatement pstmt = conn.prepareStatement(sql);
-                         ResultSet rs = pstmt.executeQuery()) {
-                        if (rs.next()) {
-                            String data = rs.getString("config_data");
-                            String source = rs.getString("server_name");
-                            plugin.getLogger().info("从代理端加载配置（来源: " + source + "）");
-                            return data;
-                        }
-                    }
-                    return null;
-                });
-            } catch (SQLException e) {
-                plugin.getLogger().severe("从代理端加载配置失败: " + e.getMessage());
-            }
-        }
-        return null;
     }
 
     // ========== 备份 ==========

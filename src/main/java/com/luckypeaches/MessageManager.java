@@ -20,7 +20,7 @@ public class MessageManager {
     }
 
     public void loadMessages() {
-        messagesFile = new File(plugin.getDataFolder(), "messages.yml");
+        messagesFile = new File(plugin.getConfigDir(), "messages.yml");
         if (!messagesFile.exists()) {
             plugin.saveResource("messages.yml", false);
         }
@@ -55,7 +55,7 @@ public class MessageManager {
     }
 
     public void reloadMessages() {
-        messagesFile = new File(plugin.getDataFolder(), "messages.yml");
+        messagesFile = new File(plugin.getConfigDir(), "messages.yml");
         messagesConfig = YamlConfiguration.loadConfiguration(messagesFile);
         mergeDefaultMessages();
         showPrefix = messagesConfig.getBoolean("show_prefix", true);

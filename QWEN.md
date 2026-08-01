@@ -2,22 +2,17 @@
 
 ## What this is
 
-Two Minecraft plugins sharing one workspace:
+Single Spigot/Paper backend plugin (Java 17, Maven). Eating peach items permanently boosts max health via `AttributeModifier`. Features: multi-world isolation, death penalty, SQLite/MySQL dual-database, PlaceholderAPI, CraftEngine custom models, health scaling, shared config directory for network servers.
 
-- **LuckyPeaches** (repo root) — Spigot/Paper backend plugin (Java 17, Maven). Eating peach items permanently boosts max health via `AttributeModifier`. Features: multi-world isolation, death penalty, SQLite/MySQL dual-database, PlaceholderAPI, CraftEngine custom models, health scaling.
-- **LuckyPeaches-Proxy** (`LuckyPeaches-Proxy/`) — Velocity proxy plugin. Stores full config in MySQL so backend servers sync settings on startup.
+The former `LuckyPeaches-Proxy` (Velocity config sync via MySQL) was removed — replaced by a **shared config directory** (`shared_config_dir`) pattern copied from mcskills: all servers read the same `config.yml` / `messages.yml`, mtime polling auto-reloads on change.
 
 ## Build
 
 ```sh
-# Backend
 mvn package
-
-# Proxy
-cd LuckyPeaches-Proxy && mvn package
 ```
 
-Output: `target/Liu-<artifactId>-<version>.jar` (custom `<finalName>` in each pom.xml).
+Output: `target/Liu-LuckyPeaches-<version>.jar` (custom `<finalName>` in pom.xml).
 
 **No Maven wrapper** — requires system Maven. No tests, no CI, no linting.
 
@@ -28,44 +23,39 @@ Output: `target/Liu-<artifactId>-<version>.jar` (custom `<finalName>` in each po
 cp target/Liu-LuckyPeaches-*.jar /home/test/test1/plugins/
 cp target/Liu-LuckyPeaches-*.jar /home/test/test2/plugins/
 cp target/Liu-LuckyPeaches-*.jar /home/p/          # production
-
-# Proxy jar
-cp LuckyPeaches-Proxy/target/Liu-LuckyPeaches-Proxy-*.jar /home/test/vel/plugins/
 ```
 
-## Source layout
-
-### Backend (`src/main/java/com/luckypeaches/`)
+## Source layout (`src/main/java/com/luckypeaches/`)
 
 | File | Role |
 |------|------|
-| `LuckyPeaches.java` | Entrypoint. `mergeDefaultConfig()` runs before MySQL sync. |
-| `PeachListener.java` | Core logic — join/quit/interact/death/world-change handlers. `PEACH_MODIFIER_UUID`, `WORLD_MAX_HEALTH_MODIFIER_UUID` constants. `eatingPlayers` set guards async eat. |
+| `LuckyPeaches.java` | Entrypoint. **Overrides `getConfig()`/`reloadConfig()`/`saveConfig()`** to redirect to shared dir when `shared_config_dir` is set. `startConfigPollTask()` polls file mtimes. |
+| `PeachListener.java` | Core logic — join/quit/interact/death/world-change handlers. `PEACH_MODIFIER_UUID`, `WORLD_MAX_HEALTH_MODIFIER_UUID` constants. `eatingPlayers` set guards async eat. `onJoin` async-verifies peach bonus from DB (multi-server sync). |
 | `PeachManager.java` | Peach item creation, CraftEngine integration with vanilla fallback. |
 | `DatabaseManager.java` | Dual SQLite/MySQL. `executeQuery(DBAction)` callback pattern handles connection lifecycle. |
-| `PeachCommand.java` | All `/lp` subcommands including `/lp db` for hot-switching database type. |
+| `PeachCommand.java` | All `/lp` subcommands including `/lp db` hot-switch and `/lp clearhealth`. |
 | `BackupManager.java` | Auto-backup. SQLite: VACUUM INTO. MySQL: YML/JSON export. |
-| `MessageManager.java` | i18n from `messages.yml`. `&` color codes. |
+| `MessageManager.java` | i18n from `messages.yml` (loaded from `getConfigDir()`). `&` color codes. |
 | `PeachPlaceholder.java` | PlaceholderAPI expansion. Reads from AttributeModifier (no DB call). |
-| `PeachIntegrationAPI.java` | Public API for other plugins (battle disable/restore). |
-
-### Proxy (`LuckyPeaches-Proxy/src/main/java/com/luckypeaches/proxy/`)
-
-| File | Role |
-|------|------|
-| `LuckyPeachesProxy.java` | Velocity entrypoint. On init: load config → init DB → register command → sync config to MySQL. |
-| `config/ProxyConfig.java` | SnakeYAML config loading. Promotes `settings.*` keys to top-level for backend compat. |
-| `database/ProxyDatabase.java` | MySQL via HikariCP. Auto-creates database. Writes raw config.yml to `lp_config` table. |
-| `command/ProxyCommand.java` | `/lp-proxy reload` command. |
+| `PeachIntegrationAPI.java` | Public API for other plugins (battle disable/restore, clear modifiers). |
 
 ## Resources
 
 - `plugin.yml` — resource filtering on (`${project.version}` substituted). `api-version: 1.13`. MySQL/HikariCP via `libraries` (auto-downloaded by server, NOT bundled in jar).
-- `velocity-plugin.json` — proxy plugin descriptor.
-- `config.yml` (both projects) — proxy has `database:` at root + `settings:` section. Backend has everything under `settings:`.
+- `config.yml` — `shared_config_dir` at root + everything else under `settings:`.
 - `messages.yml` — all user-facing strings. `&` color codes.
 
 ## Key patterns & gotchas
+
+### Shared config directory (network servers)
+
+`shared_config_dir` points to a directory shared by all servers (NFS etc.). When set:
+
+- `getConfig()`/`reloadConfig()`/`saveConfig()` are overridden to read/write `shared_config_dir/config.yml` transparently — **all existing `getConfig()` call sites keep working**.
+- `getConfigDir()` returns shared dir (used by `MessageManager` for `messages.yml`).
+- `config_poll_interval` (seconds, 0=off) enables a timer that watches `config.yml` + `messages.yml` mtimes and hot-reloads config, messages, peaches, and re-applies modifiers when a file changes.
+- Local `plugins/LuckyPeaches/config.yml` only needs `shared_config_dir` set — it acts as a pointer.
+- Do NOT store `data.db` (SQLite) in the shared dir — SQLite is not safe across servers. Only config/messages are shared.
 
 ### DatabaseManager connection lifecycle
 
@@ -85,12 +75,7 @@ The `executeQuery(DBAction<T>)` callback pattern handles this: MySQL connections
 - `eatingPlayers` Set prevents duplicate eat attempts during async processing. Always clean up in `finally` or `catch`.
 - **Never call Bukkit API from async threads** (e.g., `player.getHealth()` in async context is unsafe).
 - **Never do blocking DB calls on main thread** — `PeachPlaceholder` reads from AttributeModifier, not DB.
-
-### Config sync (proxy → backend via MySQL)
-
-1. Proxy reads its `config.yml` (raw YAML string), writes to MySQL `lp_config` table.
-2. Backend on startup: if MySQL mode, reads config from DB, merges into local config.
-3. **Critical**: merge must skip `settings.database` keys to preserve local MySQL connection details. Filter: `key.startsWith("settings.database.") || key.equals("settings.database")`.
+- `onJoin` modifier verification: DB read on async thread, modifier apply back on main thread.
 
 ### Health modifier UUIDs
 
@@ -98,7 +83,7 @@ Derived from `UUID.nameUUIDFromBytes("LuckyPeaches".getBytes())` and `"LuckyPeac
 
 ### Database hot-switch (`/lp db`)
 
-Switches SQLite ↔ MySQL with data migration. Sequence: save online players → read all data → create new DB → write data → replace manager → close old. **Old DB must be closed AFTER new DB is fully ready**, not before.
+Switches SQLite ↔ MySQL with data migration. Sequence: save online players → read all data → create new DB → write data → replace manager → close old. **Old DB must be closed AFTER new DB is fully ready**, not before. Player snapshots (UUID/name/health) captured on main thread BEFORE the async task — never call Bukkit API from the async thread.
 
 ## Dependencies
 
@@ -107,16 +92,14 @@ Switches SQLite ↔ MySQL with data migration. Sequence: save online players →
 | Paper API 1.21 | Yes | provided | Minimum `api-version: 1.13` |
 | PlaceholderAPI | Optional | provided | `softdepend` in plugin.yml |
 | CraftEngine | Optional | provided | Maven repo `repo.momirealms.net`. Both `craft-engine-bukkit` + `craft-engine-core`. |
-| MySQL Connector 8.0.33 | Optional | provided | Backend: via `libraries` auto-download. Proxy: bundled via shade. |
-| HikariCP 5.1.0 | Optional | provided | Same as above. |
+| MySQL Connector 8.0.33 | Optional | provided | Via `libraries` auto-download |
+| HikariCP 5.1.0 | Optional | provided | Same as above |
 
-**Backend**: all deps are `provided` scope — the server supplies them at runtime via `libraries` in plugin.yml.
-**Proxy**: MySQL + HikariCP are bundled (shade plugin with `ServicesResourceTransformer`). Velocity API is `provided`.
+All deps are `provided` scope — the server supplies them at runtime via `libraries` in plugin.yml.
 
 ## Commands and permissions
 
 Main: `/luckypeach` (aliases: `/lp`, `/luckyp`). Requires `luckypeach.admin`.
-Proxy: `/lp-proxy`. Requires `luckypeaches.proxy.admin`.
 
 Permissions: `luckypeaches.maxhealth.<key>` (VIP health caps), `luckypeaches.deathpenalty.<key>` (death penalty groups).
 

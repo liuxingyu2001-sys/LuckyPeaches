@@ -61,6 +61,9 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             case "import":
                 handleImport(sender, args);
                 break;
+            case "clearhealth":
+                handleClearHealth(sender, args);
+                break;
             default:
                 sendHelp(sender);
                 break;
@@ -159,6 +162,34 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
                     "%health%", String.format("%.1f", finalNewBonus)));
             });
         });
+    }
+
+    private void handleClearHealth(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage(ChatColor.RED + "用法: /lp clearhealth <玩家|all>");
+            return;
+        }
+
+        if (args[1].equalsIgnoreCase("all")) {
+            int count = 0;
+            for (Player p : Bukkit.getOnlinePlayers()) {
+                PeachIntegrationAPI.clearNonPeachModifiers(p);
+                count++;
+            }
+            sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("clear_health_all",
+                "%count%", String.valueOf(count)));
+            return;
+        }
+
+        Player target = Bukkit.getPlayer(args[1]);
+        if (target == null) {
+            sender.sendMessage(ChatColor.RED + "错误: 玩家 " + args[1] + " 不在线。");
+            return;
+        }
+
+        PeachIntegrationAPI.clearNonPeachModifiers(target);
+        sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("clear_health_success",
+            "%player%", target.getName()));
     }
 
     private void handleGive(CommandSender sender, String[] args) {
@@ -603,14 +634,20 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         if (!sender.hasPermission("luckypeach.admin")) return new ArrayList<>();
 
         if (args.length == 1) {
-            return Arrays.asList("give", "reload", "help", "gethealth", "sethealth", "backup", "world", "db", "import").stream()
+            return Arrays.asList("give", "reload", "help", "gethealth", "sethealth", "clearhealth", "backup", "world", "db", "import").stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
                     .collect(Collectors.toList());
         }
 
-        if (args.length == 2 && (args[0].equalsIgnoreCase("give") || args[0].equalsIgnoreCase("gethealth") || args[0].equalsIgnoreCase("sethealth"))) {
-            return Bukkit.getOnlinePlayers().stream()
+        if (args.length == 2 && (args[0].equalsIgnoreCase("give") || args[0].equalsIgnoreCase("gethealth") || args[0].equalsIgnoreCase("sethealth") || args[0].equalsIgnoreCase("clearhealth"))) {
+            List<String> options = new ArrayList<>();
+            if (args[0].equalsIgnoreCase("clearhealth")) {
+                options.add("all");
+            }
+            Bukkit.getOnlinePlayers().stream()
                     .map(Player::getName)
+                    .forEach(options::add);
+            return options.stream()
                     .filter(s -> s.toLowerCase().startsWith(args[1].toLowerCase()))
                     .collect(Collectors.toList());
         }

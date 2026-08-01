@@ -104,6 +104,15 @@ public class PeachListener implements Listener {
         Player player = event.getPlayer();
         UUID playerId = player.getUniqueId();
 
+        // 设置基础生命值
+        double baseMaxHealth = plugin.getConfig().getDouble("settings.base_max_health", 20.0);
+        if (baseMaxHealth > 0) {
+            AttributeInstance maxHealthAttr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+            if (maxHealthAttr != null && maxHealthAttr.getBaseValue() != baseMaxHealth) {
+                maxHealthAttr.setBaseValue(baseMaxHealth);
+            }
+        }
+
         // 检查玩家是否在屏蔽世界中
         final boolean isInDisabledWorld;
         if (plugin.getConfig().getBoolean("world_integration.enabled", true)) {
@@ -130,10 +139,63 @@ public class PeachListener implements Listener {
                 plugin.getLogger().info("玩家 " + player.getName() + " 在屏蔽世界中，移除蟠桃加成");
             }
         }
-        // 非屏蔽世界：信任 playerdata，不做任何操作
 
-        // 更新血条显示
-        plugin.updateHealthScale(player);
+        if (isInDisabledWorld) {
+            // 屏蔽世界：移除 modifier，直接更新血条
+            plugin.updateHealthScale(player);
+            return;
+        }
+
+        // 非屏蔽世界：异步从数据库校验蟠桃加成，确保多端切换后血量正确
+        final String joinWorldName = player.getWorld().getName();
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            double peachBonus = plugin.getDatabaseManager().loadPlayerData(playerId);
+
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+
+                AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+                if (attr == null) return;
+
+                // 校验蟠桃 modifier 是否与数据库一致
+                double currentModifierValue = 0;
+                for (org.bukkit.attribute.AttributeModifier mod : attr.getModifiers()) {
+                    if (mod.getUniqueId().equals(PEACH_MODIFIER_UUID)) {
+                        currentModifierValue = mod.getAmount();
+                        break;
+                    }
+                }
+
+                if (Math.abs(currentModifierValue - peachBonus) >= 0.001) {
+                    double healthBefore = player.getHealth();
+
+                    attr.getModifiers().stream()
+                        .filter(mod -> mod.getUniqueId().equals(PEACH_MODIFIER_UUID))
+                        .forEach(attr::removeModifier);
+
+                    if (peachBonus > 0) {
+                        attr.addModifier(new org.bukkit.attribute.AttributeModifier(
+                            PEACH_MODIFIER_UUID,
+                            "LuckyPeaches",
+                            peachBonus,
+                            org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
+                        ));
+                    }
+
+                    player.setHealth(Math.min(healthBefore, attr.getValue()));
+
+                    if (plugin.isDebug()) {
+                        plugin.getLogger().info("玩家 " + player.getName() + " 登录校验: modifier "
+                            + currentModifierValue + " → " + peachBonus);
+                    }
+                }
+
+                // 应用世界最大生命值
+                applyWorldMaxHealth(player, joinWorldName);
+
+                plugin.updateHealthScale(player);
+            });
+        });
     }
 
     @EventHandler(priority = org.bukkit.event.EventPriority.HIGHEST)

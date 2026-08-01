@@ -1,12 +1,20 @@
+# 共享配置目录（群组服多端共用，留空则使用插件数据目录）
+# 所有服务器读取同一份 config.yml / messages.yml，修改后自动同步重载
+shared_config_dir: ""
+# 配置文件变更检测间隔（秒），0 = 禁用自动重载
+config_poll_interval: 5
+
 settings:
   # 调试模式
   debug: false
+  # 登录时设置基础最大生命值（≤0 禁用）
+  base_max_health: 20.0
   # 数据库配置
   database:
     # 数据库类型: sqlite 或 mysql
     type: sqlite
     # MySQL 配置（仅 type: mysql 时生效）
-    # 使用 MySQL 时，大部分配置会从代理端自动同步
+    # 使用 MySQL 时，玩家数据共享，配置从共享目录读取
     mysql:
       host: localhost
       port: 3306

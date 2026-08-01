@@ -11,10 +11,33 @@ public class LuckyPeaches extends JavaPlugin {
     private boolean pluginInitialized = false;
     private boolean debug = false;
 
+    // ══════ 群组服共享配置 ══════
+    private java.io.File sharedConfigDir;
+    private long configPollInterval;
+    private org.bukkit.scheduler.BukkitTask configPollTask;
+    private final java.util.Map<String, Long> lastConfigMtimes = new java.util.HashMap<>();
+    private static final java.util.List<String> CONFIG_FILES = java.util.List.of("config.yml", "messages.yml");
+    private org.bukkit.configuration.file.FileConfiguration sharedConfig;
+
     @Override
     public void onEnable() {
         instance = this;
         saveDefaultConfig();
+
+        // 共享配置目录（多端共用，替代 Proxy 同步）
+        String sharedDir = getConfig().getString("shared_config_dir", "");
+        if (sharedDir != null && !sharedDir.isEmpty()) {
+            sharedConfigDir = new java.io.File(sharedDir);
+            if (!sharedConfigDir.exists()) sharedConfigDir.mkdirs();
+            // 确保共享目录包含默认配置文件
+            ensureResourceInDir("config.yml", new java.io.File(sharedConfigDir, "config.yml"));
+            ensureResourceInDir("messages.yml", new java.io.File(sharedConfigDir, "messages.yml"));
+            // 从共享目录加载配置
+            reloadConfig();
+            getLogger().info("[ConfigSync] 共享配置目录: " + sharedConfigDir.getAbsolutePath());
+        }
+        configPollInterval = getConfig().getLong("config_poll_interval", 0);
+
         mergeDefaultConfig();
 
         PeachCommand cmd = new PeachCommand(this);
@@ -22,6 +45,69 @@ public class LuckyPeaches extends JavaPlugin {
         getCommand("luckypeach").setTabCompleter(cmd);
 
         initializePlugin();
+    }
+
+    // ══════ 共享配置（重写 Bukkit 配置读写，透明重定向到共享目录）══════
+
+    @Override
+    public org.bukkit.configuration.file.FileConfiguration getConfig() {
+        if (sharedConfigDir != null) {
+            if (sharedConfig == null) reloadConfig();
+            return sharedConfig;
+        }
+        return super.getConfig();
+    }
+
+    @Override
+    public void reloadConfig() {
+        if (sharedConfigDir != null) {
+            java.io.File configFile = new java.io.File(sharedConfigDir, "config.yml");
+            sharedConfig = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(configFile);
+            try (java.io.InputStream defStream = getResource("config.yml")) {
+                if (defStream != null) {
+                    sharedConfig.setDefaults(org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(
+                        new java.io.InputStreamReader(defStream)));
+                }
+            } catch (java.io.IOException ignored) {
+            }
+            return;
+        }
+        super.reloadConfig();
+        sharedConfig = null;
+    }
+
+    @Override
+    public void saveConfig() {
+        if (sharedConfigDir != null) {
+            try {
+                getConfig().save(new java.io.File(sharedConfigDir, "config.yml"));
+            } catch (java.io.IOException e) {
+                getLogger().severe("保存配置失败: " + e.getMessage());
+            }
+            return;
+        }
+        super.saveConfig();
+    }
+
+    /**
+     * 获取配置文件目录：共享目录优先，否则用插件数据目录
+     */
+    public java.io.File getConfigDir() {
+        return sharedConfigDir != null ? sharedConfigDir : getDataFolder();
+    }
+
+    /**
+     * 确保资源文件存在于目标目录（支持自定义共享目录）
+     */
+    private void ensureResourceInDir(String resourceName, java.io.File targetFile) {
+        if (targetFile.exists()) return;
+        try (java.io.InputStream in = getResource(resourceName)) {
+            if (in == null) return;
+            targetFile.getParentFile().mkdirs();
+            java.nio.file.Files.copy(in, targetFile.toPath());
+        } catch (java.io.IOException e) {
+            getLogger().warning("复制资源 " + resourceName + " 失败: " + e.getMessage());
+        }
     }
 
     /**
@@ -44,67 +130,63 @@ public class LuckyPeaches extends JavaPlugin {
 
         if (changed) {
             try {
-                getConfig().save(new java.io.File(getDataFolder(), "config.yml"));
+                getConfig().save(new java.io.File(getConfigDir(), "config.yml"));
                 getLogger().info("已自动补全缺失的配置键");
             } catch (java.io.IOException e) {
                 getLogger().severe("保存配置失败: " + e.getMessage());
             }
         }
     }
+
+    // ══════ 共享配置轮询 ══════
+
+    /** 记录配置文件修改时间 */
+    private void recordConfigMtimes() {
+        for (String name : CONFIG_FILES) {
+            java.io.File f = new java.io.File(getConfigDir(), name);
+            lastConfigMtimes.put(name, f.exists() ? f.lastModified() : 0L);
+        }
+    }
+
+    /** 启动配置文件变更轮询（多端共享目录场景） */
+    private void startConfigPollTask() {
+        if (configPollInterval <= 0) return;
+        recordConfigMtimes();
+        long periodTicks = configPollInterval * 20L;
+        configPollTask = getServer().getScheduler().runTaskTimer(this, () -> {
+            for (String name : CONFIG_FILES) {
+                java.io.File f = new java.io.File(getConfigDir(), name);
+                long mtime = f.exists() ? f.lastModified() : 0L;
+                if (mtime != lastConfigMtimes.getOrDefault(name, 0L)) {
+                    getLogger().info("[ConfigSync] 检测到 " + name + " 变更，自动重载...");
+                    reloadConfig();
+                    mergeDefaultConfig();
+                    messageManager.reloadMessages();
+                    peachManager.loadPeaches();
+                    reapplyModifiersForOnlinePlayers();
+                    recordConfigMtimes();
+                    return;
+                }
+            }
+        }, periodTicks, periodTicks);
+        getLogger().info("[ConfigSync] 配置变更检测已启用，间隔: " + configPollInterval + " 秒");
+    }
     
     private void initializePlugin() {
         if (pluginInitialized) {
             return;
         }
-        
+
         this.debug = getConfig().getBoolean("settings.debug", false);
-        
+
         this.messageManager = new MessageManager(this);
-        
+
         this.databaseManager = new DatabaseManager(this);
         this.databaseManager.initialize();
 
-        // MySQL 模式：从代理端同步配置
-        if (databaseManager.isMysql()) {
-            getLogger().info("正在从代理端同步配置...");
-            String configData = databaseManager.loadConfigFromDatabase();
-            if (configData != null) {
-                getLogger().info("已获取代理端配置数据，长度: " + configData.length());
-                org.bukkit.configuration.file.YamlConfiguration mysqlConfig =
-                    org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(
-                        new java.io.StringReader(configData));
-                // 检查 peaches 配置
-                if (mysqlConfig.contains("peaches")) {
-                    getLogger().info("代理端配置包含 peaches 节，键数量: " +
-                        mysqlConfig.getConfigurationSection("peaches").getKeys(false).size());
-                } else {
-                    getLogger().warning("代理端配置不包含 peaches 节！");
-                }
-                // 保存本地数据库配置（完整的 settings.database 部分）
-                org.bukkit.configuration.ConfigurationSection localDbSection =
-                    getConfig().getConfigurationSection("settings.database");
-                // 合并配置
-                for (String key : mysqlConfig.getKeys(true)) {
-                    // 跳过 database 相关配置，保留本地的
-                    if (key.startsWith("database.") || key.equals("database")
-                        || key.startsWith("settings.database.") || key.equals("settings.database")) {
-                        continue;
-                    }
-                    getConfig().set(key, mysqlConfig.get(key));
-                }
-                // 恢复本地数据库配置
-                if (localDbSection != null) {
-                    getConfig().set("settings.database", localDbSection);
-                }
-                getLogger().info("已从代理端同步配置");
-            } else {
-                getLogger().warning("MySQL 中无配置数据，使用本地配置");
-            }
-        }
-        
         this.backupManager = new BackupManager(this);
         this.backupManager.initialize();
-        
+
         this.peachManager = new PeachManager();
         this.peachManager.loadPeaches();
 
@@ -118,16 +200,24 @@ public class LuckyPeaches extends JavaPlugin {
             getLogger().info("未检测到 PlaceholderAPI，占位符功能不可用。");
         }
 
+        // 启动共享配置变更检测
+        startConfigPollTask();
+
         getLogger().info("LuckyPeaches 插件已启用！");
         pluginInitialized = true;
     }
-    
+
     @Override
     public void onDisable() {
         if (!pluginInitialized) {
             return;
         }
-        
+
+        if (configPollTask != null) {
+            configPollTask.cancel();
+            configPollTask = null;
+        }
+
         saveAllOnlinePlayers();
         
         if (backupManager != null) {
