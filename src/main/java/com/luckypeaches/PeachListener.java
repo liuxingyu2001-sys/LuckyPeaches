@@ -261,9 +261,18 @@ public class PeachListener implements Listener {
         AttributeInstance maxHealthAttr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
         if (maxHealthAttr == null) return;
 
-        // 检查动态上限（使用总生命值，因为现在使用AttributeModifier）
+        // 检查动态上限（基础生命值 + 蟠桃加成，排除世界最大生命值 modifier）
+        // 否则在设置了 world_max_health 的世界中总生命值恒 ≥ 上限，无法吃桃
         double limit = getMaxHealthLimit(player);
-        double currentTotalHealth = maxHealthAttr.getValue();
+        double baseHealth = maxHealthAttr.getBaseValue();
+        double currentPeachBonusForLimit = 0;
+        for (org.bukkit.attribute.AttributeModifier mod : maxHealthAttr.getModifiers()) {
+            if (mod.getUniqueId().equals(PEACH_MODIFIER_UUID)) {
+                currentPeachBonusForLimit = mod.getAmount();
+                break;
+            }
+        }
+        double currentTotalHealth = baseHealth + currentPeachBonusForLimit;
         if (currentTotalHealth >= limit) {
             double currentPeachForMax = 0;
             for (org.bukkit.attribute.AttributeModifier mod : maxHealthAttr.getModifiers()) {
@@ -647,9 +656,10 @@ public class PeachListener implements Listener {
                 attr.getModifiers().stream()
                     .filter(mod -> mod.getUniqueId().equals(WORLD_MAX_HEALTH_MODIFIER_UUID))
                     .forEach(attr::removeModifier);
-                
-                // 计算加成差值（相对于原版20点基础生命值）
-                double worldBonus = maxHealth - 20.0;
+
+                // 计算加成差值（相对于当前基础生命值，兼容 base_max_health 配置）
+                double baseValue = attr.getBaseValue();
+                double worldBonus = maxHealth - baseValue;
                 if (worldBonus > 0) {
                     org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
                         WORLD_MAX_HEALTH_MODIFIER_UUID,
