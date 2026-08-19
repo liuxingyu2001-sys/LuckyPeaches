@@ -1,4 +1,4 @@
-# QWEN.md
+# info.md
 
 ## What this is
 
