@@ -25,10 +25,13 @@ Minecraft 幸运蟠桃插件 — 食用蟠桃可永久提升最大生命值，�
 
 ```bash
 mvn clean package
-# 输出: target/Liu-LuckyPeaches-2.2.jar
+# 输出: target/Liu-LuckyPeaches-<版本>.jar
 ```
 
 **部署：** JAR → Spigot/Paper 服务器的 `plugins/` 目录
+
+> 建议使用 **Paper（含 Leaf/Purpur 等分支）**：SQLite/MySQL 驱动与 HikariCP 通过 `plugin.yml` 的
+> `libraries` 自动下载，Spigot 不支持该字段，需要自行把驱动放进服务端 classpath。
 
 ## 命令
 
@@ -124,6 +127,23 @@ settings:
 
 `messages.yml` 可自定义所有插件消息，支持 `&` 颜色代码。设为 `show_prefix: false` 可关闭 `[幸运蟠桃]` 前缀。
 
+可用占位符：
+
+| 占位符 | 含义 | 使用位置 |
+|--------|------|----------|
+| `%player%` | 玩家名 | 多数指令消息 |
+| `%peach_health%` | 当前蟠桃加成值（1 位小数） | `success` / `fail` / `max_health_reached` / `death_penalty` |
+| `%bonus%` | 本次获得的加成 | `success` |
+| `%penalty%` | 本次死亡损失的加成 | `death_penalty` |
+| `%world%` / `%worlds%` | 世界名 / 世界列表 | `world_*` |
+| `%health%` | 数值 | `get_health` / `set_health_success` / `world_max_health_*` |
+| `%amount%` / `%peach%` | 数量 / 蟠桃名 | `give_*` |
+| `%count%` / `%type%` / `%error%` | 数量 / 数据库类型 / 错误信息 | `db_*` / `clear_health_all` |
+
+> ⚠️ 消息模板里不要写裸 `%`（例如 `100%`），它会被当作格式化占位符。
+> `death_penalty` 兼容旧的 `%.1f / %.1f` 写法，但推荐使用 `%penalty%` + `%peach_health%`；
+> 模板写坏时插件会原样发送消息并输出一条警告，不会中断主线程。
+
 ## API
 
 供其他插件调用（调用时无视觉变化，不触发受伤/回血动画）：
@@ -149,7 +169,7 @@ PeachIntegrationAPI.clearNonPeachModifiers(player);
 ```
 ├── pom.xml                           # Maven 配置
 ├── src/main/java/com/luckypeaches/
-│   ├── LuckyPeaches.java             # 插件入口（共享配置目录 + 配置读写重定向）
+│   ├── LuckyPeaches.java             # 插件入口（共享配置目录 + 配置读写重定向 + 调度辅助）
 │   ├── PeachListener.java            # 核心逻辑（吃桃/死亡/世界切换/登录血量同步）
 │   ├── PeachManager.java             # 蟠桃物品创建（CraftEngine 集成）
 │   ├── DatabaseManager.java          # 双数据库（SQLite/MySQL）
@@ -157,6 +177,7 @@ PeachIntegrationAPI.clearNonPeachModifiers(player);
 │   ├── BackupManager.java            # 自动备份
 │   ├── MessageManager.java           # i18n 消息（从共享目录读取）
 │   ├── PeachPlaceholder.java         # PlaceholderAPI 扩展
+│   ├── HealthModifierUtil.java       # 生命值 AttributeModifier 统一操作（UUID/增删/读取）
 │   └── PeachIntegrationAPI.java      # 公共 API
 └── src/main/resources/
     ├── plugin.yml
@@ -165,6 +186,39 @@ PeachIntegrationAPI.clearNonPeachModifiers(player);
 ```
 
 ## 更新日志
+
+### v2.3.0
+- **修复内存/资源泄漏**：默认配置与消息文件的 jar 资源流未关闭；插件卸载时未清理静态集合
+  （`playersInDisabledWorld`、`playersMaxHealthWorld`、`lastDeathTime`、`eatingPlayers`、
+  `pendingDeathPenalty`、战斗标记）与静态 `instance` 引用，热重载后会残留状态
+- **修复配置键补全失效**：`mergeDefaultConfig()` 使用了会回退到 defaults 的 `contains(key)`，
+  永远判定为"已存在"，导致新增配置项从不写入配置文件（改用 `contains(key, true)`）
+- **修复备份任务风险**：`backup_interval_hours: 0` 会让任务每 tick 执行；重复启动会产生多个
+  备份任务；手动备份与定时备份可能并发写同一文件
+- **修复死亡惩罚消息**：模板被改坏（裸 `%`）时 `String.format` 抛异常打断主线程任务，
+  改为容错格式化，并支持 `%penalty%` / `%peach_health%` 占位符
+- **修复数据库热切换**：配置写入/备份任务重启原来在异步线程调用 Bukkit API（线程不安全），
+  改为迁移成功后在主线程执行；迁移失败时不再写入配置（避免重启后连到空库）
+- **修复排名查询**：`getPlayerRank` 对无记录/无加成玩家返回 1，改为返回 -1
+- **修复 `/lp sethealth 0`**：会留下 0 值 modifier，现在会正确清除
+- **修复世界状态残留**：`world_max_health` 关闭或世界配置被删除后，旧 modifier 会一直挂在玩家身上；
+  配置热重载/`/lp world` 修改后现在会立即对在线玩家生效
+- **修复世界最大生命值不更新**：`/lp world setmax`、配置热重载对"当前就站在该世界"的玩家原本完全无效
+  （只比较世界名就跳过），现在会比对 modifier 数值后重新应用
+- **修复屏蔽世界加成回灌**：配置重载/数据库切换/登录校验/吃桃/死亡惩罚等异步回调，重新套用
+  modifier 前都会复查玩家是否已被移入屏蔽世界
+- **修复 `/lp backup now` 卡服**：备份（VACUUM INTO / 整表导出）改为异步执行
+- **修复 CraftEngine 降级物品**：CE 不可用时回退的原版物品现在会正确写入显示名/lore/CustomModelData
+  （之前只带 PDC 标记，玩家拿到的是"无名"物品）
+- **修复交互被拦截仍吃桃**：被区域/保护插件取消的右键事件不再消耗蟠桃
+- **修复 `world getmax/removemax`**：改用 `contains(key, true)`，不再把默认配置里的键当成"已设置"
+- **插件生命周期**：卸载时注销 PlaceholderAPI 扩展并清空所有静态状态；`settings.debug` 现在会随
+  配置热重载刷新；`/lp reload` 检测到 `database.type` 被改动时会提示改用 `/lp db` 迁移
+- **代码优化**：抽出 `HealthModifierUtil` 统一 10+ 处重复的 modifier 查找/移除/添加逻辑；
+  SQL 语句预拼接；迁移写入改为分批 + 事务；`toLowerCase` 指定 Locale；`chance` 判定由 `<=` 改为 `<`
+- **健壮性**：数据库初始化失败时禁用插件而不是静默带病运行（并明确声明 sqlite-jdbc 依赖）；
+  `/lp give` 数量上限 2304；插件关闭期间静默跳过调度任务；控制台配置热重载任务增加异常兜底
+  （避免一次异常永久停掉热重载）
 
 ### v2.2
 - **MySQL 数据库支持**：HikariCP 连接池，适用于多服务器/群组服环境

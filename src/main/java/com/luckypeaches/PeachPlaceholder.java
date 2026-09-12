@@ -34,13 +34,11 @@ public class PeachPlaceholder extends PlaceholderExpansion {
 
     @Override
     public String onPlaceholderRequest(Player player, String params) {
-        if (player == null) {
+        if (player == null || params == null) {
             return "";
         }
 
-        String lower = params.toLowerCase();
-
-        switch (lower) {
+        switch (params.toLowerCase(java.util.Locale.ROOT)) {
             case "peach_bonus":
                 return String.format("%.1f", getPeachBonusFromModifier(player));
 
@@ -58,13 +56,6 @@ public class PeachPlaceholder extends PlaceholderExpansion {
     private double getPeachBonusFromModifier(Player player) {
         org.bukkit.attribute.AttributeInstance attr =
             player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
-        if (attr == null) return 0.0;
-
-        for (org.bukkit.attribute.AttributeModifier mod : attr.getModifiers()) {
-            if (mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID)) {
-                return mod.getAmount();
-            }
-        }
-        return 0.0;
+        return HealthModifierUtil.getPeachBonus(attr);
     }
 }

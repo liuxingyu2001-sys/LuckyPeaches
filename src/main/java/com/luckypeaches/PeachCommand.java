@@ -3,6 +3,7 @@ package com.luckypeaches;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -36,9 +37,10 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        switch (args[0].toLowerCase()) {
+        // toLowerCase 必须指定 Locale，否则土耳其语环境下 "I" 会被转成 "ı"
+        switch (args[0].toLowerCase(Locale.ROOT)) {
             case "reload":
-                handleReload(sender, args);
+                handleReload(sender);
                 break;
             case "gethealth":
                 handleGetHealth(sender, args);
@@ -71,10 +73,24 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
-    private void handleReload(CommandSender sender, String[] args) {
+    private void handleReload(CommandSender sender) {
         plugin.reloadConfig();
-        plugin.getPeachManager().loadPeaches();
+        plugin.mergeDefaultConfig();
         plugin.getMessageManager().reloadMessages();
+        plugin.getPeachManager().loadPeaches();
+        // 配置可能改了屏蔽世界 / 世界最大生命值 / 备份开关，同步生效
+        plugin.getPeachListener().refreshWorldStateForOnlinePlayers();
+        plugin.getBackupManager().restartBackupTask();
+        plugin.reapplyModifiersForOnlinePlayers();
+
+        // 热重载不会重建数据库连接：配置里改了 type 必须走 /lp db 迁移
+        boolean configuredMysql = "mysql".equalsIgnoreCase(
+            plugin.getConfig().getString("settings.database.type", "sqlite"));
+        if (configuredMysql != plugin.getDatabaseManager().isMysql()) {
+            sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_type_mismatch",
+                "%type%", configuredMysql ? "MySQL" : "SQLite"));
+        }
+
         sender.sendMessage(plugin.getMessageManager().getPrefixedMessage("reload_success"));
     }
 
@@ -92,13 +108,11 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
         final UUID targetId = target.getUniqueId();
         final String targetName = target.getName();
-        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+        plugin.runAsync(() -> {
             double peachBonus = plugin.getDatabaseManager().loadCompletePlayerData(targetId).getPeachBonus();
-            plugin.getServer().getScheduler().runTask(plugin, () -> {
-                sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("get_health",
-                    "%player%", targetName,
-                    "%health%", String.format("%.1f", peachBonus)));
-            });
+            plugin.runSync(() -> sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("get_health",
+                "%player%", targetName,
+                "%health%", String.format("%.1f", peachBonus))));
         });
     }
 
@@ -117,7 +131,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         double newBonus;
         try {
             newBonus = Double.parseDouble(args[2]);
-            if (newBonus < 0) throw new NumberFormatException();
+            if (newBonus < 0 || !Double.isFinite(newBonus)) throw new NumberFormatException();
         } catch (NumberFormatException e) {
             sender.sendMessage(ChatColor.RED + "错误: 数值必须是非负数字。");
             return;
@@ -129,33 +143,24 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         final double finalNewBonus = newBonus;
 
         // 先异步保存数据库，成功后再在主线程应用modifier
-        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+        plugin.runAsync(() -> {
             plugin.getDatabaseManager().savePlayerData(targetId, targetName, finalNewBonus, currentHealth);
-            plugin.getServer().getScheduler().runTask(plugin, () -> {
+            plugin.runSync(() -> {
                 Player onlineTarget = Bukkit.getPlayer(targetId);
                 if (onlineTarget == null || !onlineTarget.isOnline()) return;
 
-                AttributeInstance maxHealthAttr = onlineTarget.getAttribute(Attribute.GENERIC_MAX_HEALTH);
-                if (maxHealthAttr != null) {
-                    maxHealthAttr.getModifiers().stream()
-                        .filter(mod -> mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
-                        .forEach(maxHealthAttr::removeModifier);
-
-                    org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                        PeachListener.PEACH_MODIFIER_UUID,
-                        "LuckyPeaches",
-                        finalNewBonus,
-                        org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
-                    );
-                    maxHealthAttr.addModifier(modifier);
-
-                    double newHealth = maxHealthAttr.getValue();
-                    if (currentHealth > newHealth) {
-                        onlineTarget.setHealth(newHealth);
+                // 屏蔽世界内不套用加成，只改数据库（离开屏蔽世界后会按新值恢复）
+                if (!PeachListener.isPlayerInDisabledWorld(targetId)) {
+                    AttributeInstance maxHealthAttr = onlineTarget.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+                    if (maxHealthAttr != null) {
+                        HealthModifierUtil.applyPeachBonus(maxHealthAttr, finalNewBonus);
+                        double newHealth = maxHealthAttr.getValue();
+                        if (currentHealth > newHealth) {
+                            onlineTarget.setHealth(newHealth);
+                        }
                     }
+                    plugin.updateHealthScale(onlineTarget);
                 }
-
-                plugin.updateHealthScale(onlineTarget);
 
                 sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("set_health_success",
                     "%player%", targetName,
@@ -221,12 +226,13 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage(ChatColor.RED + "错误: 找不到 ID 为 '" + peachId + "' 的蟠桃配置。");
             return;
         }
+        amount = peach.getAmount();
 
         java.util.Map<Integer, ItemStack> leftover = target.getInventory().addItem(peach);
-        
-        String peachName = peach.hasItemMeta() && peach.getItemMeta().hasDisplayName()
+
+        String peachName = peach.hasItemMeta() && peach.getItemMeta() != null && peach.getItemMeta().hasDisplayName()
             ? peach.getItemMeta().getDisplayName() : peach.getType().name();
-        
+
         if (!leftover.isEmpty()) {
             for (ItemStack drop : leftover.values()) {
                 target.getWorld().dropItemNaturally(target.getLocation(), drop);
@@ -248,14 +254,16 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        switch (args[1].toLowerCase()) {
+        switch (args[1].toLowerCase(Locale.ROOT)) {
             case "now":
-                boolean success = plugin.getBackupManager().backupDatabase();
-                if (success) {
-                    sender.sendMessage(ChatColor.GREEN + "数据库备份成功！");
-                } else {
-                    sender.sendMessage(ChatColor.RED + "数据库备份失败，请查看控制台日志。");
-                }
+                // 备份可能是 VACUUM INTO / 整表导出，放主线程会卡服
+                sender.sendMessage(ChatColor.YELLOW + "正在备份数据库...");
+                plugin.runAsync(() -> {
+                    boolean success = plugin.getBackupManager().backupDatabase();
+                    plugin.runSync(() -> sender.sendMessage(success
+                        ? ChatColor.GREEN + "数据库备份成功！"
+                        : ChatColor.RED + "数据库备份失败，请查看控制台日志。"));
+                });
                 break;
             case "list":
                 List<String> backups = plugin.getBackupManager().getBackupList();
@@ -292,7 +300,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        switch (args[1].toLowerCase()) {
+        switch (args[1].toLowerCase(Locale.ROOT)) {
             case "add":
                 if (args.length < 3) {
                     sender.sendMessage(ChatColor.RED + "用法: /lp world add <世界名称>");
@@ -342,47 +350,49 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
     private void handleWorldAdd(CommandSender sender, String worldName) {
         List<String> disabledWorlds = plugin.getConfig().getStringList("world_integration.disabled_worlds");
-        
+
         if (disabledWorlds.contains(worldName)) {
             sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("world_already_disabled",
                 "%world%", worldName));
             return;
         }
-        
+
         disabledWorlds.add(worldName);
         plugin.getConfig().set("world_integration.disabled_worlds", disabledWorlds);
         plugin.saveConfig();
-        
+        // 立即对已在该世界的玩家生效，无需等他们切世界
+        plugin.getPeachListener().refreshWorldStateForOnlinePlayers();
+
         sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("world_add",
             "%world%", worldName));
     }
 
     private void handleWorldRemove(CommandSender sender, String worldName) {
         List<String> disabledWorlds = plugin.getConfig().getStringList("world_integration.disabled_worlds");
-        
+
         if (!disabledWorlds.contains(worldName)) {
             sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("world_not_disabled",
                 "%world%", worldName));
             return;
         }
-        
+
         disabledWorlds.remove(worldName);
         plugin.getConfig().set("world_integration.disabled_worlds", disabledWorlds);
         plugin.saveConfig();
-        
+        plugin.getPeachListener().refreshWorldStateForOnlinePlayers();
+
         sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("world_remove",
             "%world%", worldName));
     }
 
     private void handleWorldList(CommandSender sender) {
         List<String> disabledWorlds = plugin.getConfig().getStringList("world_integration.disabled_worlds");
-        
+
         if (disabledWorlds.isEmpty()) {
             sender.sendMessage(ChatColor.YELLOW + "当前没有屏蔽任何世界。");
         } else {
-            String worldsList = String.join(", ", disabledWorlds);
             sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("world_list",
-                "%worlds%", worldsList));
+                "%worlds%", String.join(", ", disabledWorlds)));
         }
     }
 
@@ -395,7 +405,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         double maxHealth;
         try {
             maxHealth = Double.parseDouble(healthValue);
-            if (maxHealth <= 0) throw new NumberFormatException();
+            if (maxHealth <= 0 || !Double.isFinite(maxHealth)) throw new NumberFormatException();
         } catch (NumberFormatException e) {
             sender.sendMessage(ChatColor.RED + "错误: 数值必须是正数。");
             return;
@@ -403,6 +413,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
         plugin.getConfig().set("world_max_health.worlds." + worldName, maxHealth);
         plugin.saveConfig();
+        plugin.getPeachListener().refreshWorldStateForOnlinePlayers();
 
         sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("world_max_health_set",
             "%world%", worldName,
@@ -415,7 +426,9 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        if (plugin.getConfig().contains("world_max_health.worlds." + worldName)) {
+        // 用 contains(path, true) 忽略 defaults：Bukkit 的 contains(path) 会把默认配置里的键
+        // 也判定为"已设置"，导致 /lp world getmax 报告一个实际不在 config.yml 里的值
+        if (plugin.getConfig().contains("world_max_health.worlds." + worldName, true)) {
             double maxHealth = plugin.getConfig().getDouble("world_max_health.worlds." + worldName);
             sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("world_max_health_get",
                 "%world%", worldName,
@@ -442,14 +455,12 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(plugin.getMessageManager().getPrefixedMessage("world_max_health_list"));
 
         for (java.util.Map.Entry<String, Object> entry : worldsMap.entrySet()) {
-            String world = entry.getKey();
             Object value = entry.getValue();
             if (!(value instanceof Number)) continue;
-            double health = ((Number) value).doubleValue();
             sender.sendMessage(plugin.getMessageManager().getReplacedMessage("world_max_health_list_item",
-                    "%world%", world,
-                    "%health%", String.valueOf(health)));
-            }
+                "%world%", entry.getKey(),
+                "%health%", String.valueOf(((Number) value).doubleValue())));
+        }
     }
 
     private void handleWorldRemoveMax(CommandSender sender, String worldName) {
@@ -458,9 +469,10 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        if (plugin.getConfig().contains("world_max_health.worlds." + worldName)) {
+        if (plugin.getConfig().contains("world_max_health.worlds." + worldName, true)) {
             plugin.getConfig().set("world_max_health.worlds." + worldName, null);
             plugin.saveConfig();
+            plugin.getPeachListener().refreshWorldStateForOnlinePlayers();
 
             sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("world_max_health_removed",
                 "%world%", worldName));
@@ -476,15 +488,15 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        switch (args[1].toLowerCase()) {
+        switch (args[1].toLowerCase(Locale.ROOT)) {
             case "status":
-                String currentType = plugin.getDatabaseManager().isUseMysql() ? "MySQL" : "SQLite";
+                String currentType = plugin.getDatabaseManager().isMysql() ? "MySQL" : "SQLite";
                 sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_current_type",
                     "%type%", currentType));
                 break;
             case "mysql":
             case "sqlite":
-                handleDatabaseSwitch(sender, args[1].toLowerCase());
+                handleDatabaseSwitch(sender, args[1].toLowerCase(Locale.ROOT));
                 break;
             default:
                 plugin.getMessageManager().sendDatabaseHelpMessage(sender);
@@ -494,12 +506,11 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
     private void handleDatabaseSwitch(CommandSender sender, String targetType) {
         boolean targetIsMysql = "mysql".equalsIgnoreCase(targetType);
-        boolean currentIsMysql = plugin.getDatabaseManager().isUseMysql();
+        boolean currentIsMysql = plugin.getDatabaseManager().isMysql();
 
         if (targetIsMysql == currentIsMysql) {
-            String typeName = targetIsMysql ? "MySQL" : "SQLite";
             sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_already_same_type",
-                "%type%", typeName));
+                "%type%", targetIsMysql ? "MySQL" : "SQLite"));
             return;
         }
 
@@ -515,56 +526,57 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             playerHealthSnapshot.put(p.getUniqueId(), p.getHealth());
         }
 
-        // 异步执行迁移
-        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+        // 异步执行迁移；配置文件的写入放到迁移成功后的主线程，
+        // 这样迁移失败时配置与运行状态仍然一致（否则重启后会连到一个空库）
+        plugin.runAsync(() -> {
+            DatabaseManager oldDbManager = plugin.getDatabaseManager();
             try {
                 // 1. 使用主线程捕获的数据保存所有在线玩家
-                com.luckypeaches.DatabaseManager oldDbManager = plugin.getDatabaseManager();
                 for (java.util.Map.Entry<UUID, Double> entry : playerHealthSnapshot.entrySet()) {
                     UUID playerId = entry.getKey();
-                    double health = entry.getValue();
                     DatabaseManager.PlayerHealthData hd = oldDbManager.loadCompletePlayerData(playerId);
-                    oldDbManager.savePlayerData(playerId, playerNameSnapshot.get(playerId), hd.getPeachBonus(), health);
+                    oldDbManager.savePlayerData(playerId, playerNameSnapshot.get(playerId), hd.getPeachBonus(), entry.getValue());
                 }
 
                 // 2. 读取当前全部数据
                 java.util.List<Object[]> data = oldDbManager.readAllDataForMigration();
                 plugin.getLogger().info("已读取 " + data.size() + " 条记录，准备迁移到 " + typeName + "...");
 
-                // 3. 修改 config
-                plugin.getConfig().set("settings.database.type", targetType);
-                plugin.saveConfig();
-                plugin.reloadConfig();
-
-                // 4. 创建新的 DatabaseManager 并初始化
-                com.luckypeaches.DatabaseManager newDbManager = new com.luckypeaches.DatabaseManager(plugin);
-                newDbManager.initialize();
-
-                // 5. 写入数据到新数据库
-                if (!data.isEmpty()) {
-                    newDbManager.writeAllData(data);
-                    plugin.getLogger().info("数据迁移完成，共迁移 " + data.size() + " 条记录");
+                // 3. 按目标类型创建新 DatabaseManager 并初始化（此时还没改 config）
+                DatabaseManager newDbManager = new DatabaseManager(plugin, targetIsMysql);
+                if (!newDbManager.initialize()) {
+                    throw new IllegalStateException(typeName + " 初始化失败，已保留原数据库");
                 }
 
-                // 6. 替换 databaseManager 并关闭旧的
-                plugin.setDatabaseManager(newDbManager);
-                oldDbManager.close();
+                // 4. 写入数据到新数据库
+                if (!data.isEmpty() && !newDbManager.writeAllData(data)) {
+                    newDbManager.close();
+                    throw new IllegalStateException("数据写入 " + typeName + " 失败，已保留原数据库");
+                }
 
-                // 7. 重启 BackupManager
-                plugin.getBackupManager().shutdown();
-                plugin.setBackupManager(new com.luckypeaches.BackupManager(plugin));
-                plugin.getBackupManager().initialize();
-
-                // 8. 预加载所有在线玩家的蟠桃加成（异步，不阻塞主线程）
+                // 5. 预加载所有在线玩家的蟠桃加成（异步，不阻塞主线程）
                 java.util.Map<UUID, Double> bonuses = new java.util.LinkedHashMap<>();
                 for (UUID playerId : playerNameSnapshot.keySet()) {
                     bonuses.put(playerId, newDbManager.loadPlayerData(playerId));
                 }
 
-                // 9. 主线程重新应用 modifier
                 final int count = data.size();
-                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                // 6. 回到主线程：写配置、替换管理器、重启备份、重新套用 modifier
+                plugin.runSync(() -> {
+                    plugin.getConfig().set("settings.database.type", targetType);
+                    plugin.saveConfig();
+                    plugin.reloadConfig();
+
+                    plugin.setDatabaseManager(newDbManager);
+                    // 旧库确认无人使用后再关闭，避免迁移期间的数据丢失
+                    plugin.runAsync(oldDbManager::close);
+
+                    plugin.getBackupManager().shutdown();
+                    plugin.setBackupManager(new BackupManager(plugin));
+                    plugin.getBackupManager().initialize();
+
                     plugin.reapplyModifiersForOnlinePlayers(bonuses);
+
                     if (count > 0) {
                         sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_switch_success",
                             "%type%", typeName,
@@ -576,11 +588,8 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
                 });
             } catch (Exception e) {
                 plugin.getLogger().severe("数据库切换失败: " + e.getMessage());
-                e.printStackTrace();
-                plugin.getServer().getScheduler().runTask(plugin, () -> {
-                    sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_switch_failed",
-                        "%error%", e.getMessage()));
-                });
+                plugin.runSync(() -> sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("db_switch_failed",
+                    "%error%", String.valueOf(e.getMessage()))));
             }
         });
     }
@@ -610,12 +619,12 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        final java.io.File finalFile = sqliteFile;
+        final java.io.File sourceFile = sqliteFile;
         sender.sendMessage(ChatColor.YELLOW + "正在从 SQLite 导入数据...");
 
-        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-            int count = plugin.getDatabaseManager().importFromSQLite(finalFile);
-            plugin.getServer().getScheduler().runTask(plugin, () -> {
+        plugin.runAsync(() -> {
+            int count = plugin.getDatabaseManager().importFromSQLite(sourceFile);
+            plugin.runSync(() -> {
                 if (count >= 0) {
                     sender.sendMessage(ChatColor.GREEN + "导入成功！共导入 " + count + " 条记录。");
                 } else {
@@ -635,71 +644,63 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 1) {
             return Arrays.asList("give", "reload", "help", "gethealth", "sethealth", "clearhealth", "backup", "world", "db", "import").stream()
-                    .filter(s -> s.startsWith(args[0].toLowerCase()))
+                    .filter(s -> s.startsWith(args[0].toLowerCase(Locale.ROOT)))
                     .collect(Collectors.toList());
         }
 
-        if (args.length == 2 && (args[0].equalsIgnoreCase("give") || args[0].equalsIgnoreCase("gethealth") || args[0].equalsIgnoreCase("sethealth") || args[0].equalsIgnoreCase("clearhealth"))) {
+        String sub = args[0].toLowerCase(Locale.ROOT);
+
+        if (args.length == 2 && (sub.equals("give") || sub.equals("gethealth") || sub.equals("sethealth") || sub.equals("clearhealth"))) {
             List<String> options = new ArrayList<>();
-            if (args[0].equalsIgnoreCase("clearhealth")) {
+            if (sub.equals("clearhealth")) {
                 options.add("all");
             }
             Bukkit.getOnlinePlayers().stream()
                     .map(Player::getName)
                     .forEach(options::add);
-            return options.stream()
-                    .filter(s -> s.toLowerCase().startsWith(args[1].toLowerCase()))
-                    .collect(Collectors.toList());
+            return filterPrefix(options, args[1]);
         }
 
-        if (args.length == 2 && args[0].equalsIgnoreCase("backup")) {
-            return Arrays.asList("now", "list", "enable", "disable").stream()
-                    .filter(s -> s.startsWith(args[1].toLowerCase()))
-                    .collect(Collectors.toList());
+        if (args.length == 2 && sub.equals("backup")) {
+            return filterPrefix(Arrays.asList("now", "list", "enable", "disable"), args[1]);
         }
 
-        if (args.length == 2 && args[0].equalsIgnoreCase("db")) {
-            return Arrays.asList("status", "mysql", "sqlite").stream()
-                    .filter(s -> s.startsWith(args[1].toLowerCase()))
-                    .collect(Collectors.toList());
+        if (args.length == 2 && sub.equals("db")) {
+            return filterPrefix(Arrays.asList("status", "mysql", "sqlite"), args[1]);
         }
 
-        if (args.length == 2 && args[0].equalsIgnoreCase("world")) {
-            return Arrays.asList("add", "remove", "list", "setmax", "getmax", "listmax", "removemax").stream()
-                    .filter(s -> s.startsWith(args[1].toLowerCase()))
-                    .collect(Collectors.toList());
+        if (args.length == 2 && sub.equals("world")) {
+            return filterPrefix(Arrays.asList("add", "remove", "list", "setmax", "getmax", "listmax", "removemax"), args[1]);
         }
 
-        if (args.length == 3 && args[0].equalsIgnoreCase("world")) {
-            if (args[1].equalsIgnoreCase("add")) {
+        if (args.length == 3 && sub.equals("world")) {
+            String action = args[1].toLowerCase(Locale.ROOT);
+            if (action.equals("add") || action.equals("setmax") || action.equals("getmax") || action.equals("removemax")) {
                 return Bukkit.getWorlds().stream()
                         .map(org.bukkit.World::getName)
-                        .filter(s -> s.toLowerCase().startsWith(args[2].toLowerCase()))
+                        .filter(s -> s.toLowerCase(Locale.ROOT).startsWith(args[2].toLowerCase(Locale.ROOT)))
                         .collect(Collectors.toList());
             }
-            if (args[1].equalsIgnoreCase("remove")) {
-                return plugin.getConfig().getStringList("world_integration.disabled_worlds").stream()
-                        .filter(s -> s.toLowerCase().startsWith(args[2].toLowerCase()))
-                        .collect(Collectors.toList());
-            }
-            if (args[1].equalsIgnoreCase("setmax") || args[1].equalsIgnoreCase("getmax") || args[1].equalsIgnoreCase("removemax")) {
-                return Bukkit.getWorlds().stream()
-                        .map(org.bukkit.World::getName)
-                        .filter(s -> s.toLowerCase().startsWith(args[2].toLowerCase()))
-                        .collect(Collectors.toList());
+            if (action.equals("remove")) {
+                return filterPrefix(plugin.getConfig().getStringList("world_integration.disabled_worlds"), args[2]);
             }
         }
 
-        if (args.length == 3 && args[0].equalsIgnoreCase("give")) {
-            return plugin.getPeachManager().getPeachIds().stream()
-                    .filter(s -> s.toLowerCase().startsWith(args[2].toLowerCase()))
-                    .collect(Collectors.toList());
+        if (args.length == 3 && sub.equals("give")) {
+            return filterPrefix(plugin.getPeachManager().getPeachIds(), args[2]);
         }
 
-        if (args.length == 4 && args[0].equalsIgnoreCase("give")) {
-            return Arrays.asList("1", "16", "32", "64");
+        if (args.length == 4 && sub.equals("give")) {
+            return filterPrefix(Arrays.asList("1", "16", "32", "64"), args[3]);
         }
 
         return new ArrayList<>();
+    }
+
+    private List<String> filterPrefix(List<String> options, String prefix) {
+        String lowerPrefix = prefix.toLowerCase(Locale.ROOT);
+        return options.stream()
+                .filter(s -> s.toLowerCase(Locale.ROOT).startsWith(lowerPrefix))
+                .collect(Collectors.toList());
     }
 }

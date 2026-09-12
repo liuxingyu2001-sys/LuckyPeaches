@@ -5,8 +5,8 @@
 LuckyPeaches 插件提供了一套完整的API接口，允许其他插件（如决斗插件、公会战插件等）临时控制玩家的蟠桃血量加成。
 
 ### 核心功能
-- **临时禁用蟠桃加成**：在战斗、决斗等场景下临时移除玩家的蟠桃血量加成
-- **自动恢复满血**：恢复蟠桃加成时，自动将玩家生命值恢复到最大生命值上限
+- **临时禁用蟠桃加成**：在战斗、决斗等场景下临时让蟠桃血量加成失效（**只打标记，不动物品属性，玩家血条不会有任何视觉变化**）
+- **自动同步恢复**：解除战斗标记时从数据库重新读取蟠桃加成并同步 modifier（仅在数值变化时更新，避免血条抖动）
 - **批量操作支持**：支持单个玩家和批量玩家的操作
 
 ### API类
@@ -21,32 +21,31 @@ com.luckypeaches.PeachIntegrationAPI
 ### 1. 单个玩家控制
 
 #### `setPlayerInBattle(Player player)`
-临时关闭指定玩家的蟠桃血量加成。
+标记玩家进入战斗状态。**不会移除 modifier，不会改变血条显示，不触发受伤/回血动画。**
 
 **参数：**
-- `player` - 目标玩家对象
+- `player` - 目标玩家对象（null 或离线会被忽略）
 
 **功能：**
-- 移除玩家身上的蟠桃血量modifier
-- 更新血量显示
-- 在主线程执行，确保线程安全
+- 仅写入内部战斗标记
+- 被标记期间：死亡不扣除蟠桃血量、`setPlayerNotInBattle` 之外的操作不受影响
 
 **使用场景：** 玩家进入决斗/战斗时调用
 
 ---
 
 #### `setPlayerNotInBattle(Player player)`
-恢复指定玩家的蟠桃血量加成。
+解除战斗标记并同步蟠桃加成。
 
 **参数：**
-- `player` - 目标玩家对象
+- `player` - 目标玩家对象（null 或离线会被忽略）
 
 **功能：**
-- 从数据库加载玩家的蟠桃加成值
-- 重新应用蟠桃血量modifier
-- 更新血量显示
-- **将玩家生命值恢复到最大生命值上限**
-- 异步加载数据，主线程应用modifier
+- 清除战斗标记
+- 异步从数据库读取玩家的蟠桃加成值
+- 回到主线程后：仅当 modifier 数值与数据库不一致时才重新应用（先移除旧值再添加新值）
+- 数值变化时才更新血条缩放，并把当前血量限制在新上限内（**不会强制回满血**）
+- 受 `world_integration.peach_restore_delay_ticks` 控制延迟
 
 **使用场景：** 玩家退出决斗/战斗时调用
 
@@ -55,29 +54,28 @@ com.luckypeaches.PeachIntegrationAPI
 ### 2. 批量玩家控制
 
 #### `setPlayersInBattle(Collection<Player> players)`
-临时关闭多个玩家的蟠桃血量加成。
+批量标记战斗状态。
 
 **参数：**
 - `players` - 玩家集合（List、Set等）
 
 **功能：**
-- 批量移除多个玩家的蟠桃血量modifier
-- 自动过滤空值和离线玩家
+- 逐个调用 `setPlayerInBattle`
+- 自动过滤 null 和离线玩家
 
 **使用场景：** 团队决斗、公会战开始时调用
 
 ---
 
 #### `setPlayersNotInBattle(Collection<Player> players)`
-恢复多个玩家的蟠桃血量加成。
+批量解除战斗标记并同步蟠桃加成。
 
 **参数：**
 - `players` - 玩家集合（List、Set等）
 
 **功能：**
-- 批量恢复多个玩家的蟠桃血量modifier
-- **将所有玩家生命值恢复到最大生命值上限**
-- 自动过滤空值和离线玩家
+- 逐个调用 `setPlayerNotInBattle`
+- 自动过滤 null 和离线玩家
 
 **使用场景：** 团队决斗、公会战结束时调用
 
@@ -85,11 +83,28 @@ com.luckypeaches.PeachIntegrationAPI
 
 ### 3. 工具方法
 
+#### `isPlayerInBattle(UUID playerUuid)`
+检查玩家是否处于战斗状态。
+
+**返回值：**
+- `boolean` - 是否在战斗中（玩家离线/未标记为 false）
+
+**使用场景：** 判断是否需要跳过蟠桃相关逻辑
+
+---
+
+#### `clearNonPeachModifiers(Player player)` / `clearNonPeachModifiers(Collection<Player> players)`
+清理玩家身上**所有非蟠桃**的 `GENERIC_MAX_HEALTH` modifier（等价于 `/lp clearhealth`）。
+
+**⚠️ 注意：** 会一并移除装备、药水等来源的血量 modifier，请谨慎使用。
+
+---
+
 #### `getPluginInstance()`
 获取LuckyPeaches插件实例。
 
 **返回值：**
-- `LuckyPeaches` - 插件实例对象
+- `LuckyPeaches` - 插件实例对象；**插件卸载后返回 null**，请判空
 
 **使用场景：** 需要访问插件内部功能时使用
 

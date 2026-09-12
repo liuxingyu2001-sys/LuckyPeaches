@@ -3,8 +3,10 @@ author: liuxingyu2001
 version: ${project.version}
 main: com.luckypeaches.LuckyPeaches
 api-version: 1.13
-softdepend: [PlaceholderAPI]
+softdepend: [PlaceholderAPI, CraftEngine]
 libraries:
+  # SQLite 驱动：Paper 内置同名库，这里显式声明以免受其他插件加载顺序影响
+  - org.xerial:sqlite-jdbc:3.49.1.0
   - mysql:mysql-connector-java:8.0.33
   - com.zaxxer:HikariCP:5.1.0
 commands:

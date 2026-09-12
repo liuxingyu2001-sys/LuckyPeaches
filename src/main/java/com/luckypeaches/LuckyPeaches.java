@@ -8,6 +8,8 @@ public class LuckyPeaches extends JavaPlugin {
     private DatabaseManager databaseManager;
     private BackupManager backupManager;
     private MessageManager messageManager;
+    private PeachListener peachListener;
+    private PeachPlaceholder placeholder;
     private boolean pluginInitialized = false;
     private boolean debug = false;
 
@@ -17,7 +19,8 @@ public class LuckyPeaches extends JavaPlugin {
     private org.bukkit.scheduler.BukkitTask configPollTask;
     private final java.util.Map<String, Long> lastConfigMtimes = new java.util.HashMap<>();
     private static final java.util.List<String> CONFIG_FILES = java.util.List.of("config.yml", "messages.yml");
-    private org.bukkit.configuration.file.FileConfiguration sharedConfig;
+    /** 共享配置；volatile 保证异步线程（备份、指令）能看到主线程热重载后的新实例 */
+    private volatile org.bukkit.configuration.file.FileConfiguration sharedConfig;
 
     @Override
     public void onEnable() {
@@ -28,7 +31,9 @@ public class LuckyPeaches extends JavaPlugin {
         String sharedDir = getConfig().getString("shared_config_dir", "");
         if (sharedDir != null && !sharedDir.isEmpty()) {
             sharedConfigDir = new java.io.File(sharedDir);
-            if (!sharedConfigDir.exists()) sharedConfigDir.mkdirs();
+            if (!sharedConfigDir.exists() && !sharedConfigDir.mkdirs()) {
+                getLogger().warning("[ConfigSync] 共享配置目录创建失败: " + sharedConfigDir.getAbsolutePath());
+            }
             // 确保共享目录包含默认配置文件
             ensureResourceInDir("config.yml", new java.io.File(sharedConfigDir, "config.yml"));
             ensureResourceInDir("messages.yml", new java.io.File(sharedConfigDir, "messages.yml"));
@@ -40,11 +45,59 @@ public class LuckyPeaches extends JavaPlugin {
 
         mergeDefaultConfig();
 
-        PeachCommand cmd = new PeachCommand(this);
-        getCommand("luckypeach").setExecutor(cmd);
-        getCommand("luckypeach").setTabCompleter(cmd);
+        org.bukkit.command.PluginCommand pluginCommand = getCommand("luckypeach");
+        if (pluginCommand == null) {
+            getLogger().severe("plugin.yml 中未定义 luckypeach 指令，管理员指令不可用。");
+        } else {
+            PeachCommand cmd = new PeachCommand(this);
+            pluginCommand.setExecutor(cmd);
+            pluginCommand.setTabCompleter(cmd);
+        }
 
         initializePlugin();
+    }
+
+    // ══════ 调度器辅助（插件已禁用时静默跳过，避免关服竞态抛 IllegalStateException）══════
+
+    /** 异步执行任务 */
+    public void runAsync(Runnable task) {
+        runTask(task, true, -1L);
+    }
+
+    /** 延迟异步执行任务 */
+    public void runAsyncLater(Runnable task, long delayTicks) {
+        runTask(task, true, Math.max(0L, delayTicks));
+    }
+
+    /** 主线程执行任务 */
+    public void runSync(Runnable task) {
+        runTask(task, false, -1L);
+    }
+
+    /** 延迟主线程执行任务 */
+    public void runSyncLater(Runnable task, long delayTicks) {
+        runTask(task, false, Math.max(0L, delayTicks));
+    }
+
+    private void runTask(Runnable task, boolean async, long delayTicks) {
+        if (!isEnabled()) {
+            return; // 插件正在关闭：任务要么会被 Bukkit 取消，要么依赖的服务已关闭，直接跳过
+        }
+        try {
+            if (delayTicks < 0) {
+                if (async) {
+                    getServer().getScheduler().runTaskAsynchronously(this, task);
+                } else {
+                    getServer().getScheduler().runTask(this, task);
+                }
+            } else if (async) {
+                getServer().getScheduler().runTaskLaterAsynchronously(this, task, delayTicks);
+            } else {
+                getServer().getScheduler().runTaskLater(this, task, delayTicks);
+            }
+        } catch (IllegalStateException e) {
+            getLogger().fine("插件正在关闭，已跳过调度任务");
+        }
     }
 
     // ══════ 共享配置（重写 Bukkit 配置读写，透明重定向到共享目录）══════
@@ -62,18 +115,24 @@ public class LuckyPeaches extends JavaPlugin {
     public void reloadConfig() {
         if (sharedConfigDir != null) {
             java.io.File configFile = new java.io.File(sharedConfigDir, "config.yml");
-            sharedConfig = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(configFile);
+            org.bukkit.configuration.file.YamlConfiguration config =
+                org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(configFile);
             try (java.io.InputStream defStream = getResource("config.yml")) {
                 if (defStream != null) {
-                    sharedConfig.setDefaults(org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(
-                        new java.io.InputStreamReader(defStream)));
+                    try (java.io.InputStreamReader reader = new java.io.InputStreamReader(defStream)) {
+                        config.setDefaults(org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(reader));
+                    }
                 }
-            } catch (java.io.IOException ignored) {
+            } catch (java.io.IOException e) {
+                getLogger().warning("读取默认配置失败: " + e.getMessage());
             }
+            sharedConfig = config;
+            refreshDebugFlag();
             return;
         }
         super.reloadConfig();
         sharedConfig = null;
+        refreshDebugFlag();
     }
 
     @Override
@@ -99,11 +158,14 @@ public class LuckyPeaches extends JavaPlugin {
     /**
      * 确保资源文件存在于目标目录（支持自定义共享目录）
      */
-    private void ensureResourceInDir(String resourceName, java.io.File targetFile) {
-        if (targetFile.exists()) return;
+    void ensureResourceInDir(String resourceName, java.io.File targetFile) {
+        if (targetFile == null || targetFile.exists()) return;
         try (java.io.InputStream in = getResource(resourceName)) {
             if (in == null) return;
-            targetFile.getParentFile().mkdirs();
+            java.io.File parent = targetFile.getParentFile();
+            if (parent != null) {
+                parent.mkdirs();
+            }
             java.nio.file.Files.copy(in, targetFile.toPath());
         } catch (java.io.IOException e) {
             getLogger().warning("复制资源 " + resourceName + " 失败: " + e.getMessage());
@@ -111,18 +173,29 @@ public class LuckyPeaches extends JavaPlugin {
     }
 
     /**
-     * 合并默认配置，自动补全缺失的配置键
+     * 合并默认配置，自动补全缺失的配置键。
+     *
+     * <p>必须用 {@code contains(key, true)}（忽略 defaults），因为 Bukkit 的
+     * {@code contains(key)} 会回退到 defaults 判定，配置一旦 setDefaults 过就永远返回 true，
+     * 导致缺键补全功能完全失效。</p>
      */
-    private void mergeDefaultConfig() {
-        org.bukkit.configuration.file.YamlConfiguration defaultConfig =
-            org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(
-                new java.io.InputStreamReader(getResource("config.yml")));
+    public void mergeDefaultConfig() {
+        org.bukkit.configuration.file.YamlConfiguration defaultConfig;
+        try (java.io.InputStream in = getResource("config.yml")) {
+            if (in == null) return;
+            try (java.io.InputStreamReader reader = new java.io.InputStreamReader(in)) {
+                defaultConfig = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(reader);
+            }
+        } catch (java.io.IOException e) {
+            getLogger().warning("读取默认配置失败: " + e.getMessage());
+            return;
+        }
 
         org.bukkit.configuration.ConfigurationSection currentConfig = getConfig();
         boolean changed = false;
 
         for (String key : defaultConfig.getKeys(true)) {
-            if (!currentConfig.contains(key)) {
+            if (!currentConfig.contains(key, true)) {
                 currentConfig.set(key, defaultConfig.get(key));
                 changed = true;
             }
@@ -154,47 +227,90 @@ public class LuckyPeaches extends JavaPlugin {
         recordConfigMtimes();
         long periodTicks = configPollInterval * 20L;
         configPollTask = getServer().getScheduler().runTaskTimer(this, () -> {
-            for (String name : CONFIG_FILES) {
-                java.io.File f = new java.io.File(getConfigDir(), name);
-                long mtime = f.exists() ? f.lastModified() : 0L;
-                if (mtime != lastConfigMtimes.getOrDefault(name, 0L)) {
-                    getLogger().info("[ConfigSync] 检测到 " + name + " 变更，自动重载...");
-                    reloadConfig();
-                    mergeDefaultConfig();
-                    messageManager.reloadMessages();
-                    peachManager.loadPeaches();
-                    reapplyModifiersForOnlinePlayers();
-                    recordConfigMtimes();
-                    return;
-                }
+            // 必须整体捕获异常：Bukkit 中循环任务抛异常会被自动取消，一次坏配置就永久失去热重载能力
+            try {
+                pollConfigChanges();
+            } catch (Exception e) {
+                getLogger().severe("[ConfigSync] 配置热重载失败: " + e.getMessage());
             }
         }, periodTicks, periodTicks);
         getLogger().info("[ConfigSync] 配置变更检测已启用，间隔: " + configPollInterval + " 秒");
     }
-    
+
+    private void pollConfigChanges() {
+        for (String name : CONFIG_FILES) {
+            java.io.File f = new java.io.File(getConfigDir(), name);
+            long mtime = f.exists() ? f.lastModified() : 0L;
+            if (mtime != lastConfigMtimes.getOrDefault(name, 0L)) {
+                getLogger().info("[ConfigSync] 检测到 " + name + " 变更，自动重载...");
+                reloadConfig();
+                mergeDefaultConfig();
+                messageManager.reloadMessages();
+                peachManager.loadPeaches();
+                // 先修正世界相关状态（屏蔽世界/世界最大生命值），再重新套用蟠桃加成
+                peachListener.refreshWorldStateForOnlinePlayers();
+                reapplyModifiersForOnlinePlayers();
+                warnIfDatabaseTypeMismatch();
+                recordConfigMtimes();
+                return;
+            }
+        }
+    }
+
+    /**
+     * 热重载不会重建数据库连接：配置里的 type 被改动时给出明确提示，
+     * 避免服务器以为换库成功（真正换库要走 /lp db，会迁移数据）。
+     */
+    private void warnIfDatabaseTypeMismatch() {
+        if (databaseManager == null) {
+            return;
+        }
+        boolean configuredMysql = "mysql".equalsIgnoreCase(getConfig().getString("settings.database.type", "sqlite"));
+        if (configuredMysql != databaseManager.isMysql()) {
+            getLogger().warning("配置中的数据库类型为 " + (configuredMysql ? "mysql" : "sqlite")
+                + "，但当前运行在 " + (databaseManager.isMysql() ? "MySQL" : "SQLite")
+                + " 上；热重载不会迁移数据，请使用 /lp db <mysql|sqlite> 切换。");
+        }
+    }
+
+    /** 刷新 debug 开关（配置热重载后也能生效） */
+    private void refreshDebugFlag() {
+        try {
+            this.debug = getConfig().getBoolean("settings.debug", false);
+        } catch (RuntimeException e) {
+            // 配置尚未就绪时忽略
+        }
+    }
+
     private void initializePlugin() {
         if (pluginInitialized) {
             return;
         }
-
-        this.debug = getConfig().getBoolean("settings.debug", false);
+        // 先置位：初始化中途抛异常时 onDisable 仍然要执行清理（否则任务/连接泄漏）
+        pluginInitialized = true;
 
         this.messageManager = new MessageManager(this);
 
         this.databaseManager = new DatabaseManager(this);
-        this.databaseManager.initialize();
+        if (!this.databaseManager.initialize()) {
+            getLogger().severe("数据库初始化失败，插件将自动禁用（请检查配置中的数据库连接信息）。");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
 
         this.backupManager = new BackupManager(this);
         this.backupManager.initialize();
 
-        this.peachManager = new PeachManager();
+        this.peachManager = new PeachManager(this);
         this.peachManager.loadPeaches();
 
-        getServer().getPluginManager().registerEvents(new PeachListener(this), this);
+        this.peachListener = new PeachListener(this);
+        getServer().getPluginManager().registerEvents(peachListener, this);
 
         // 注册 PlaceholderAPI 扩展
         if (getServer().getPluginManager().getPlugin("PlaceholderAPI") != null) {
-            new PeachPlaceholder(this).register();
+            this.placeholder = new PeachPlaceholder(this);
+            this.placeholder.register();
             getLogger().info("已检测到 PlaceholderAPI，已注册占位符扩展。");
         } else {
             getLogger().info("未检测到 PlaceholderAPI，占位符功能不可用。");
@@ -204,30 +320,53 @@ public class LuckyPeaches extends JavaPlugin {
         startConfigPollTask();
 
         getLogger().info("LuckyPeaches 插件已启用！");
-        pluginInitialized = true;
     }
 
     @Override
     public void onDisable() {
-        if (!pluginInitialized) {
-            return;
-        }
-
+        // 注意：此时 isEnabled() 已经是 false，不能在方法开头依赖任何“已初始化”标记提前 return，
+        // 否则初始化中途失败时会漏掉任务取消和数据库关闭。
         if (configPollTask != null) {
             configPollTask.cancel();
             configPollTask = null;
         }
 
         saveAllOnlinePlayers();
-        
+
         if (backupManager != null) {
             backupManager.shutdown();
         }
         if (databaseManager != null) {
             databaseManager.close();
         }
+
+        // 注销 PlaceholderAPI 扩展，避免插件卸载后仍被 PAPI 持有
+        if (placeholder != null) {
+            try {
+                placeholder.unregister();
+            } catch (RuntimeException e) {
+                getLogger().fine("注销占位符扩展失败: " + e.getMessage());
+            }
+        }
+
+        // 清理静态运行时状态与静态实例引用，避免插件重载后残留（内存泄漏 / 状态错乱）
+        PeachListener.clearRuntimeState();
+        PeachIntegrationAPI.clearAllBattleStatus();
+
+        databaseManager = null;
+        backupManager = null;
+        messageManager = null;
+        peachManager = null;
+        peachListener = null;
+        placeholder = null;
+        sharedConfig = null;
+        lastConfigMtimes.clear();
+        pluginInitialized = false;
+        instance = null;
+
+        getLogger().info("LuckyPeaches 插件已禁用。");
     }
-    
+
     public void setDatabaseManager(DatabaseManager databaseManager) {
         this.databaseManager = databaseManager;
     }
@@ -238,25 +377,25 @@ public class LuckyPeaches extends JavaPlugin {
 
     public void saveAllOnlinePlayers() {
         if (databaseManager == null) return;
-        
+
         getLogger().info("开始保存所有在线玩家数据...");
-        
+
         for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {
             try {
                 final java.util.UUID playerId = player.getUniqueId();
                 final String playerName = player.getName();
                 final double currentHealth = player.getHealth();
-                
-                DatabaseManager.PlayerHealthData healthData = getDatabaseManager().loadCompletePlayerData(playerId);
+
+                DatabaseManager.PlayerHealthData healthData = databaseManager.loadCompletePlayerData(playerId);
                 double peachBonus = healthData.getPeachBonus();
-                
+
                 if (debug) {
                     getLogger().info("保存玩家 " + playerName + " 的数据: " +
                         "数据库蟠桃加成=" + peachBonus + ", " +
                         "当前血量=" + currentHealth);
                 }
-                
-                getDatabaseManager().savePlayerData(playerId, playerName, peachBonus, currentHealth);
+
+                databaseManager.savePlayerData(playerId, playerName, peachBonus, currentHealth);
             } catch (Exception e) {
                 getLogger().severe("保存玩家 " + player.getName() + " 数据失败: " + e.getMessage());
             }
@@ -278,11 +417,15 @@ public class LuckyPeaches extends JavaPlugin {
     public BackupManager getBackupManager() {
         return backupManager;
     }
-    
+
+    public PeachListener getPeachListener() {
+        return peachListener;
+    }
+
     public boolean isDebug() {
         return debug;
     }
-    
+
     public MessageManager getMessageManager() {
         return messageManager;
     }
@@ -292,42 +435,34 @@ public class LuckyPeaches extends JavaPlugin {
      */
     public void reapplyModifiersForOnlinePlayers(java.util.Map<java.util.UUID, Double> preloadedBonuses) {
         for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {
-            Double peachBonus = preloadedBonuses.get(player.getUniqueId());
-            if (peachBonus == null) continue;
+            java.util.UUID playerId = player.getUniqueId();
 
             org.bukkit.attribute.AttributeInstance maxHealthAttr =
                 player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
             if (maxHealthAttr == null) continue;
 
-            double currentModifierValue = 0;
-            for (org.bukkit.attribute.AttributeModifier mod : maxHealthAttr.getModifiers()) {
-                if (mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID)) {
-                    currentModifierValue = mod.getAmount();
-                    break;
+            // 屏蔽世界：不能重新套用蟠桃加成（配置变更/数据库切换后也要保持屏蔽）
+            if (PeachListener.isPlayerInDisabledWorld(playerId)) {
+                if (HealthModifierUtil.getPeachBonus(maxHealthAttr) != 0) {
+                    double healthBefore = player.getHealth();
+                    HealthModifierUtil.clearPeachBonus(maxHealthAttr);
+                    player.setHealth(Math.min(healthBefore, maxHealthAttr.getValue()));
                 }
+                updateHealthScale(player);
+                continue;
             }
 
+            Double peachBonus = preloadedBonuses.get(playerId);
+            if (peachBonus == null) continue;
+
+            double currentModifierValue = HealthModifierUtil.getPeachBonus(maxHealthAttr);
             if (Math.abs(currentModifierValue - peachBonus) < 0.001) {
                 updateHealthScale(player);
                 continue;
             }
 
             double healthBefore = player.getHealth();
-
-            maxHealthAttr.getModifiers().stream()
-                .filter(mod -> mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
-                .forEach(maxHealthAttr::removeModifier);
-
-            if (peachBonus > 0) {
-                org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                    PeachListener.PEACH_MODIFIER_UUID,
-                    "LuckyPeaches",
-                    peachBonus,
-                    org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
-                );
-                maxHealthAttr.addModifier(modifier);
-            }
-
+            HealthModifierUtil.applyPeachBonus(maxHealthAttr, peachBonus);
             player.setHealth(Math.min(healthBefore, maxHealthAttr.getValue()));
             updateHealthScale(player);
         }
@@ -341,16 +476,20 @@ public class LuckyPeaches extends JavaPlugin {
         for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {
             onlineIds.add(player.getUniqueId());
         }
+        if (onlineIds.isEmpty()) {
+            return;
+        }
 
-        getServer().getScheduler().runTaskAsynchronously(this, () -> {
+        runAsync(() -> {
+            DatabaseManager db = databaseManager;
+            if (db == null) return;
+
             java.util.Map<java.util.UUID, Double> bonuses = new java.util.LinkedHashMap<>();
             for (java.util.UUID id : onlineIds) {
-                bonuses.put(id, databaseManager.loadPlayerData(id));
+                bonuses.put(id, db.loadPlayerData(id));
             }
 
-            getServer().getScheduler().runTask(this, () -> {
-                reapplyModifiersForOnlinePlayers(bonuses);
-            });
+            runSync(() -> reapplyModifiersForOnlinePlayers(bonuses));
         });
     }
 

@@ -7,6 +7,12 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * 供其他插件调用的公共 API。
+ *
+ * <p>战斗标记只记录状态，不立即改动 modifier，避免血条视觉波动；
+ * 真正恢复加成时才从数据库读取并同步 modifier。</p>
+ */
 public class PeachIntegrationAPI {
 
     private static final Set<UUID> playersInBattle = ConcurrentHashMap.newKeySet();
@@ -23,6 +29,16 @@ public class PeachIntegrationAPI {
     }
 
     /**
+     * 批量标记战斗状态
+     */
+    public static void setPlayersInBattle(Collection<Player> players) {
+        if (players == null || players.isEmpty()) {
+            return;
+        }
+        players.forEach(PeachIntegrationAPI::setPlayerInBattle);
+    }
+
+    /**
      * 恢复指定玩家的蟠桃血量加成
      * 移除战斗标记，从数据库重新加载并同步 modifier（仅在值变化时更新）
      */
@@ -35,49 +51,38 @@ public class PeachIntegrationAPI {
         playersInBattle.remove(playerId);
 
         LuckyPeaches plugin = LuckyPeaches.getInstance();
-        if (plugin == null) {
+        if (plugin == null || plugin.getDatabaseManager() == null) {
             return;
         }
 
-        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-            DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(playerId);
-            double peachBonus = healthData.getPeachBonus();
+        plugin.runAsync(() -> {
+            double peachBonus = plugin.getDatabaseManager().loadCompletePlayerData(playerId).getPeachBonus();
 
             long delayTicks = plugin.getConfig().getLong("world_integration.peach_restore_delay_ticks", 0L);
-            plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            plugin.runSyncLater(() -> {
                 if (!player.isOnline()) return;
-                org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+                org.bukkit.attribute.AttributeInstance attr =
+                    player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
                 if (attr == null) return;
 
-                // 读取当前 modifier 值
-                double currentModifier = 0;
-                for (org.bukkit.attribute.AttributeModifier mod : attr.getModifiers()) {
-                    if (mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID)) {
-                        currentModifier = mod.getAmount();
-                        break;
-                    }
-                }
-
                 // 仅在值变化时更新，避免不必要的视觉波动
-                if (Math.abs(currentModifier - peachBonus) > 0.001) {
-                    attr.getModifiers().stream()
-                        .filter(mod -> mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
-                        .forEach(attr::removeModifier);
-
-                    if (peachBonus > 0) {
-                        org.bukkit.attribute.AttributeModifier modifier = new org.bukkit.attribute.AttributeModifier(
-                            PeachListener.PEACH_MODIFIER_UUID,
-                            "LuckyPeaches",
-                            peachBonus,
-                            org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER
-                        );
-                        attr.addModifier(modifier);
-                    }
+                if (Math.abs(HealthModifierUtil.getPeachBonus(attr) - peachBonus) > 0.001) {
+                    HealthModifierUtil.applyPeachBonus(attr, peachBonus);
                     plugin.updateHealthScale(player);
                     player.setHealth(Math.min(player.getHealth(), attr.getValue()));
                 }
             }, delayTicks);
         });
+    }
+
+    /**
+     * 批量恢复蟠桃加成
+     */
+    public static void setPlayersNotInBattle(Collection<Player> players) {
+        if (players == null || players.isEmpty()) {
+            return;
+        }
+        players.forEach(PeachIntegrationAPI::setPlayerNotInBattle);
     }
 
     /**
@@ -95,6 +100,13 @@ public class PeachIntegrationAPI {
     }
 
     /**
+     * 清空所有战斗状态（插件卸载时调用，避免静态集合跨重载残留）
+     */
+    public static void clearAllBattleStatus() {
+        playersInBattle.clear();
+    }
+
+    /**
      * 清理玩家身上所有非蟠桃插件的血量加成 modifier
      * 注意：此方法会移除除蟠桃插件以外的所有 AttributeModifier（包括装备、药水等），请谨慎使用
      */
@@ -108,14 +120,20 @@ public class PeachIntegrationAPI {
             return;
         }
 
-        plugin.getServer().getScheduler().runTask(plugin, () -> {
-            org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
-            if (attr != null) {
-                attr.getModifiers().stream()
-                    .filter(mod -> !mod.getUniqueId().equals(PeachListener.PEACH_MODIFIER_UUID))
-                    .forEach(attr::removeModifier);
-                plugin.updateHealthScale(player);
+        plugin.runSync(() -> {
+            org.bukkit.attribute.AttributeInstance attr =
+                player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+            if (attr == null) {
+                return;
             }
+            java.util.List<org.bukkit.attribute.AttributeModifier> toRemove = new java.util.ArrayList<>();
+            for (org.bukkit.attribute.AttributeModifier mod : new java.util.ArrayList<>(attr.getModifiers())) {
+                if (!HealthModifierUtil.PEACH_MODIFIER_UUID.equals(mod.getUniqueId())) {
+                    toRemove.add(mod);
+                }
+            }
+            toRemove.forEach(attr::removeModifier);
+            plugin.updateHealthScale(player);
         });
     }
 

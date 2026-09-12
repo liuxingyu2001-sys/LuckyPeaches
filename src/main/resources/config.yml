@@ -26,9 +26,12 @@ settings:
   # 本地备份设置
   database_backup:
     enabled: true
+    # 自动备份间隔（小时），最小 1
     backup_interval_hours: 1
+    # 最多保留的备份份数，最小 1
     max_backups: 7
     backup_folder: "backups"
+    # MySQL 模式的导出格式: yml 或 json
     format: yml
 
 # 以下是 SQLite 模式的默认配置

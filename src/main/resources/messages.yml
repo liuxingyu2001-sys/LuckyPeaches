@@ -1,6 +1,8 @@
 # 是否显示消息前缀（如 [幸运蟠桃]）
 show_prefix: true
 prefix: "&e[幸运蟠桃] "
+# 占位符：%bonus%（本次加成）/%peach_health%（当前蟠桃血量）/%penalty%（损失）/%player%/%world%/%health%/%amount%/%count%/%type%/%error%/%worlds%
+# 注意：消息模板请勿写裸 % 号（例如 100%），否则会被当成格式化占位符
 success: "&a蟠桃血量 &e+%bonus% &7| &a当前蟠桃血量: &e%peach_health%"
 fail: "&c什么也没发生... &7当前蟠桃血量: &e%peach_health%"
 no_permission: "&c你没有权限执行此操作。"
@@ -10,7 +12,7 @@ max_health_reached: "&c你的生命值已达巅峰，蟠桃已无法再提升。
 reload_success: "&a插件配置已重载！"
 get_health: "&f玩家 &e%player% &f当前的蟠桃加成生命值为: &a%health%"
 set_health_success: "&a已将玩家 &e%player% &a的蟠桃加成生命值设置为: &e%health%"
-death_penalty: "&c你死亡了，失去了 &e%.1f &c点蟠桃血量！&7剩余蟠桃血量: &e%.1f"
+death_penalty: "&c你死亡了，失去了 &e%penalty% &c点蟠桃血量！&7剩余蟠桃血量: &e%peach_health%"
 death_cooldown: "&e你刚复活不久，本次死亡不扣除蟠桃血！"
 world_disabled: "&c当前世界已屏蔽蟠桃血量加成，无法使用蟠桃！"
 world_enter: "&e你进入了屏蔽世界，蟠桃血量加成已被暂时禁用。"
@@ -36,6 +38,7 @@ db_switch_failed: "&c数据库切换失败: &e%error%"
 clear_health_success: "&a已清理玩家 &e%player% &a的非蟠桃血量加成"
 clear_health_all: "&a已清理所有在线玩家（&e%count% &a人）的非蟠桃血量加成"
 db_already_same_type: "&c当前已经是 %type% 类型，无需切换"
+db_type_mismatch: "&c配置文件里的数据库类型是 %type%，但当前仍在使用原数据库；热重载不会迁移数据，请执行 &e/lp db <mysql|sqlite> &c切换。"
 db_help:
   - "&6&l--- 数据库管理 ---"
   - "&e/lp db status &7- 查看当前数据库类型"

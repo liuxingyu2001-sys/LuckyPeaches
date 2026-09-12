@@ -29,15 +29,16 @@ cp target/Liu-LuckyPeaches-*.jar /home/p/          # production
 
 | File | Role |
 |------|------|
-| `LuckyPeaches.java` | Entrypoint. **Overrides `getConfig()`/`reloadConfig()`/`saveConfig()`** to redirect to shared dir when `shared_config_dir` is set. `startConfigPollTask()` polls file mtimes. |
-| `PeachListener.java` | Core logic — join/quit/interact/death/world-change handlers. `PEACH_MODIFIER_UUID`, `WORLD_MAX_HEALTH_MODIFIER_UUID` constants. `eatingPlayers` set guards async eat. `onJoin` async-verifies peach bonus from DB (multi-server sync). |
-| `PeachManager.java` | Peach item creation, CraftEngine integration with vanilla fallback. |
-| `DatabaseManager.java` | Dual SQLite/MySQL. `executeQuery(DBAction)` callback pattern handles connection lifecycle. |
+| `LuckyPeaches.java` | Entrypoint. **Overrides `getConfig()`/`reloadConfig()`/`saveConfig()`** to redirect to shared dir when `shared_config_dir` is set. `startConfigPollTask()` polls file mtimes. Also hosts `runAsync/runSync/runAsyncLater/runSyncLater` scheduler helpers. |
+| `PeachListener.java` | Core logic — join/quit/interact/death/world-change handlers. `clearRuntimeState()` wipes the static per-player collections on disable. `refreshWorldStateForOnlinePlayers()` re-evaluates disabled-world / world-max state after a config reload. |
+| `PeachManager.java` | Peach item creation, CraftEngine integration with vanilla fallback. Clamps `chance` to `[0,1]`, `health_bonus >= 0`, giveaway amount ≤ `MAX_GIVE_AMOUNT`. |
+| `DatabaseManager.java` | Dual SQLite/MySQL. `executeQuery(DBAction)` callback pattern handles connection lifecycle. `initialize()` returns `false` when the DB is unusable. `isMysql()` is the single type accessor. |
 | `PeachCommand.java` | All `/lp` subcommands including `/lp db` hot-switch and `/lp clearhealth`. |
-| `BackupManager.java` | Auto-backup. SQLite: VACUUM INTO. MySQL: YML/JSON export. |
-| `MessageManager.java` | i18n from `messages.yml` (loaded from `getConfigDir()`). `&` color codes. |
+| `BackupManager.java` | Auto-backup. SQLite: VACUUM INTO. MySQL: YML/JSON export. Re-entrancy guarded by an `AtomicBoolean`; interval clamped to ≥ 1h. |
+| `MessageManager.java` | i18n from `messages.yml` (loaded from `getConfigDir()`). `&` color codes. Caches the colored prefix. |
 | `PeachPlaceholder.java` | PlaceholderAPI expansion. Reads from AttributeModifier (no DB call). |
-| `PeachIntegrationAPI.java` | Public API for other plugins (battle disable/restore, clear modifiers). |
+| `HealthModifierUtil.java` | Single place for `AttributeModifier` lookup/remove/apply. Owns the two modifier UUID constants (aliased by `PeachListener`). |
+| `PeachIntegrationAPI.java` | Public API for other plugins (battle disable/restore, clear modifiers). Works on a battle **flag**, not on modifiers. |
 
 ## Resources
 
@@ -76,14 +77,52 @@ The `executeQuery(DBAction<T>)` callback pattern handles this: MySQL connections
 - **Never call Bukkit API from async threads** (e.g., `player.getHealth()` in async context is unsafe).
 - **Never do blocking DB calls on main thread** — `PeachPlaceholder` reads from AttributeModifier, not DB.
 - `onJoin` modifier verification: DB read on async thread, modifier apply back on main thread.
+- Use the `plugin.runAsync/runSync/runAsyncLater/runSyncLater` helpers instead of touching the scheduler
+  directly: they skip scheduling while the plugin is disabled (avoids `IllegalStateException` during shutdown)
+  and keep every call site consistent.
+- Config writes (`getConfig().set(...)` + `saveConfig()` + `reloadConfig()`) must stay on the main thread —
+  `handleDatabaseSwitch` does its migration async but returns to the main thread for the config/manager swap.
+- `getConfig()` returns a `volatile` field so async readers (backup, commands) see a hot-reloaded config.
+
+### Static state (leak-sensitive)
+
+`PeachListener` keeps five `static` per-player collections (`playersInDisabledWorld`, `playersMaxHealthWorld`,
+`lastDeathTime`, `eatingPlayers`, `pendingDeathPenalty`) and `PeachIntegrationAPI` keeps `playersInBattle`.
+Entries are removed on quit, but a task cancelled at plugin shutdown never reaches its `finally`, so
+`onDisable()` calls `PeachListener.clearRuntimeState()` + `PeachIntegrationAPI.clearAllBattleStatus()` and
+nulls the static `instance`. **Any new static collection must be cleared there too.**
+
+### Config merge gotcha
+
+`Configuration.contains(path)` falls back to the section's `defaults`. The plugin config always has defaults
+set (`setDefaults` + `copyDefaults`), so `contains(key)` returns `true` for every default key and the
+"fill in missing config keys" logic silently does nothing. Always use `contains(key, true)`.
+`messages.yml` is merged against a separate default file, but it uses `contains(key, true)` as well for safety.
 
 ### Health modifier UUIDs
 
-Derived from `UUID.nameUUIDFromBytes("LuckyPeaches".getBytes())` and `"LuckyPeachesWorldMax"`. **Changing these strings orphans existing modifiers on live servers.**
+Owned by `HealthModifierUtil` (derived from `UUID.nameUUIDFromBytes("LuckyPeaches".getBytes())` and
+`"LuckyPeachesWorldMax"`), re-exported as `PeachListener.PEACH_MODIFIER_UUID` /
+`WORLD_MAX_HEALTH_MODIFIER_UUID`. **Changing these strings orphans existing modifiers on live servers.**
+
+All modifier work goes through `HealthModifierUtil.apply/remove/getAmount` (`apply` removes the old value and
+skips adding when `amount <= 0`, so no zero-value modifiers are left behind). Don't hand-roll the
+stream-filter-remove-add dance at new call sites.
 
 ### Database hot-switch (`/lp db`)
 
-Switches SQLite ↔ MySQL with data migration. Sequence: save online players → read all data → create new DB → write data → replace manager → close old. **Old DB must be closed AFTER new DB is fully ready**, not before. Player snapshots (UUID/name/health) captured on main thread BEFORE the async task — never call Bukkit API from the async thread.
+Switches SQLite ↔ MySQL with data migration. Sequence: save online players → read all data → build the new
+`DatabaseManager` with the **explicit target type** (`new DatabaseManager(plugin, useMysql)`) → write data →
+back on the main thread: persist `settings.database.type`, swap the manager, close the old one async, restart
+`BackupManager`, re-apply modifiers. **The config file is only written after a successful migration**, so a
+failed switch leaves the old database and config untouched. Player snapshots (UUID/name/health) are captured
+on the main thread BEFORE the async task — never call Bukkit API from the async thread.
+
+### Death penalty message
+
+`messages.yml` `death_penalty` uses `%penalty%` / `%peach_health%`. The legacy `%.1f / %.1f` template is still
+honoured, and a malformed template (a bare `%`) no longer throws out of the scheduled task — it is sent
+verbatim with a console warning.
 
 ## Dependencies
 
