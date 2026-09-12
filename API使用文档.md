@@ -121,7 +121,7 @@ com.luckypeaches.PeachIntegrationAPI
     <dependency>
         <groupId>com.luckypeaches</groupId>
         <artifactId>LuckyPeaches</artifactId>
-        <version>1.2.0</version>
+        <version>2.2.1</version>
         <scope>provided</scope>
     </dependency>
 </dependencies>
@@ -131,7 +131,7 @@ com.luckypeaches.PeachIntegrationAPI
 
 ```groovy
 dependencies {
-    compileOnly 'com.luckypeaches:LuckyPeaches:1.2.0'
+    compileOnly 'com.luckypeaches:LuckyPeaches:2.2.1'
 }
 ```
 
@@ -525,8 +525,8 @@ if (player.isOnline()) {
 
 ## 📄 版本信息
 
-- **API版本**：1.2.0
-- **最后更新**：2026-03-12
+- **API版本**：2.2.1
+- **最后更新**：2026-09-12
 - **兼容Bukkit/Spigot版本**：1.13+
 
 ---

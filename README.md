@@ -187,7 +187,7 @@ PeachIntegrationAPI.clearNonPeachModifiers(player);
 
 ## 更新日志
 
-### v2.3.0
+### v2.2.1
 - **修复内存/资源泄漏**：默认配置与消息文件的 jar 资源流未关闭；插件卸载时未清理静态集合
   （`playersInDisabledWorld`、`playersMaxHealthWorld`、`lastDeathTime`、`eatingPlayers`、
   `pendingDeathPenalty`、战斗标记）与静态 `instance` 引用，热重载后会残留状态
