@@ -43,6 +43,8 @@ settings:
   death_penalty:
     enabled: true
     health_threshold: 200.0
+    # 死亡冷却（毫秒）：冷却期内再次死亡不扣罚。已持久化到数据库（跨服共享），
+    # 可拦截"假死/切服导致同一次死亡在两个服各扣一次"；建议大于一次切服的耗时（如 15000）
     death_cooldown_ms: 5000
     restore_delay_ticks: 2
     penalty_groups:

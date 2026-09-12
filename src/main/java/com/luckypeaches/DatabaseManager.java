@@ -55,6 +55,8 @@ public class DatabaseManager {
     private final LuckyPeaches plugin;
     private final boolean useMysql;
     private final String tableName;
+    /** 死亡惩罚冷却表（跨服共享，避免假死/切服导致同一次死亡被扣两次） */
+    private final String cooldownTableName;
     private final File sqliteFile;
     /** upsert 语句与数据库类型绑定，构造时确定一次即可，避免每次保存都拼字符串 */
     private final String upsertSql;
@@ -84,6 +86,7 @@ public class DatabaseManager {
         this.useMysql = useMysql;
         String prefix = plugin.getConfig().getString("settings.database.mysql.table_prefix", "lp_");
         this.tableName = prefix + "player_peach_health";
+        this.cooldownTableName = prefix + "peach_death_cooldown";
         this.sqliteFile = new File(plugin.getDataFolder(), "data.db");
         this.upsertSql = useMysql
             ? "INSERT INTO " + tableName + " (uuid, username, peach_bonus, current_health, last_updated) " +
@@ -286,6 +289,7 @@ public class DatabaseManager {
 
     private void createTables() throws SQLException {
         String sql;
+        String cooldownSql;
         if (useMysql) {
             sql = "CREATE TABLE IF NOT EXISTS " + tableName + " (" +
                   "uuid VARCHAR(36) PRIMARY KEY, " +
@@ -293,6 +297,12 @@ public class DatabaseManager {
                   "peach_bonus DOUBLE, " +
                   "current_health DOUBLE, " +
                   "last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
+                  ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+            // 冷却单独一张表：玩家表的 upsert 语句（MySQL 只更新列出列、SQLite 是整行替换）
+            // 不会碰到它，避免"恢复血量时把冷却时间戳冲掉"
+            cooldownSql = "CREATE TABLE IF NOT EXISTS " + cooldownTableName + " (" +
+                  "uuid VARCHAR(36) PRIMARY KEY, " +
+                  "last_penalty_ms BIGINT NOT NULL DEFAULT 0" +
                   ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
         } else {
             sql = "CREATE TABLE IF NOT EXISTS " + tableName + " (" +
@@ -302,11 +312,16 @@ public class DatabaseManager {
                   "current_health REAL, " +
                   "last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
                   ")";
+            cooldownSql = "CREATE TABLE IF NOT EXISTS " + cooldownTableName + " (" +
+                  "uuid TEXT PRIMARY KEY, " +
+                  "last_penalty_ms INTEGER NOT NULL DEFAULT 0" +
+                  ")";
         }
 
         executeQuery(conn -> {
             try (Statement stmt = conn.createStatement()) {
                 stmt.execute(sql);
+                stmt.execute(cooldownSql);
             }
             return null;
         });
@@ -441,6 +456,109 @@ public class DatabaseManager {
                 });
             } catch (SQLException e) {
                 plugin.getLogger().severe("更新玩家血量失败: " + e.getMessage());
+                return false;
+            }
+        }
+    }
+
+    /**
+     * 在同一把锁内完成"读加成 → 加 delta → 写回"，避免与并发的死亡惩罚/其它吃桃互相覆盖
+     * （各自"读-改-写"交错时，后写的会把先写的结果覆盖掉）。
+     *
+     * @return 写入后的新加成值；失败返回 null
+     */
+    public Double addPeachBonus(UUID uuid, String username, double delta, double currentHealth) {
+        if (closed) {
+            return null;
+        }
+        synchronized (dbLock) {
+            double current = loadCompletePlayerData(uuid).getPeachBonus();
+            double updated = current + delta;
+            if (!savePlayerData(uuid, username, updated, currentHealth)) {
+                return null;
+            }
+            return updated;
+        }
+    }
+
+    // ========== 死亡惩罚跨服冷却 ==========
+    /**
+     * 读取该玩家上次被扣罚的时间戳（毫秒）。
+     *
+     * <p>查询单独一张表，并且**任何异常都返回 0**：冷却只是防重复扣的辅助信息，
+     * 绝不能因为它（例如表被手工删掉、旧库没有这张表）影响到正常的玩家数据读写。</p>
+     *
+     * @return 上次扣罚时间戳；没有记录或查询失败时返回 0
+     */
+    public long getLastPenaltyMs(UUID uuid) {
+        if (closed) {
+            return 0L;
+        }
+        String sql = "SELECT last_penalty_ms FROM " + cooldownTableName + " WHERE uuid = ?";
+        synchronized (dbLock) {
+            try {
+                return executeQuery(conn -> {
+                    try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                        pstmt.setString(1, uuid.toString());
+                        try (ResultSet rs = pstmt.executeQuery()) {
+                            return rs.next() ? rs.getLong("last_penalty_ms") : 0L;
+                        }
+                    }
+                });
+            } catch (SQLException e) {
+                plugin.getLogger().warning("读取死亡惩罚冷却失败（本次按无冷却处理）: " + e.getMessage());
+                return 0L;
+            }
+        }
+    }
+
+    /**
+     * 写入死亡惩罚结果并记录跨服冷却时间戳。
+     *
+     * <p>玩家表只更新 peach_bonus（保留 current_health），冷却写在独立表里，
+     * 因此后续的"恢复血量保存"不会把这个时间戳冲掉。</p>
+     *
+     * @return 玩家加成是否写入成功
+     */
+    public boolean saveDeathPenalty(UUID uuid, double newPeachBonus, long nowMs) {
+        if (closed) {
+            return false;
+        }
+
+        String updateSql = "UPDATE " + tableName + " SET peach_bonus = ?, last_updated = "
+            + (useMysql ? "NOW()" : "CURRENT_TIMESTAMP") + " WHERE uuid = ?";
+        String cooldownSql = useMysql
+            ? "INSERT INTO " + cooldownTableName + " (uuid, last_penalty_ms) VALUES (?, ?) "
+              + "ON DUPLICATE KEY UPDATE last_penalty_ms = VALUES(last_penalty_ms)"
+            : "INSERT OR REPLACE INTO " + cooldownTableName + " (uuid, last_penalty_ms) VALUES (?, ?)";
+
+        synchronized (dbLock) {
+            try {
+                boolean updated = executeQuery(conn -> {
+                    try (PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
+                        pstmt.setDouble(1, newPeachBonus);
+                        pstmt.setString(2, uuid.toString());
+                        return pstmt.executeUpdate() > 0;
+                    }
+                });
+
+                // 冷却写失败不影响扣罚本身：最坏退化成"只在单服内存里做冷却"
+                try {
+                    executeQuery(conn -> {
+                        try (PreparedStatement pstmt = conn.prepareStatement(cooldownSql)) {
+                            pstmt.setString(1, uuid.toString());
+                            pstmt.setLong(2, nowMs);
+                            pstmt.executeUpdate();
+                        }
+                        return null;
+                    });
+                } catch (SQLException e) {
+                    plugin.getLogger().warning("写入死亡惩罚冷却失败（仅影响跨服冷却）: " + e.getMessage());
+                }
+
+                return updated;
+            } catch (SQLException e) {
+                plugin.getLogger().severe("保存死亡惩罚失败: " + e.getMessage());
                 return false;
             }
         }

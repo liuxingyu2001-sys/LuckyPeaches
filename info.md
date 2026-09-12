@@ -102,10 +102,13 @@ nulls the static `instance`. **Any new static collection must be cleared there t
 - `current_health` is effectively a vestigial column: nothing reads it for gameplay (the 3-arg
   `savePlayerData` only carries it forward). Death-penalty saves can therefore write `0` there.
   It is still maintained through `updateCurrentHealth()`, which never rewrites `peach_bonus`.
-- The death-penalty **cooldown is in-memory per server** (`lastDeathTime`), not persisted. In a group
-  server the cooldown therefore does not apply across a switch: die on A, switch to B, die again inside
-  what would have been the cooldown window → charged twice (two real deaths, one uncooled). Persisting it
-  needs a new column in the shared table.
+- The death-penalty cooldown IS persisted now (`<prefix>peach_death_cooldown` table, written by
+  `saveDeathPenalty`, read by `getLastPenaltyMs`) so a "fake death" (client stuck in the death state)
+  followed by a server switch cannot be charged twice inside one cooldown window. The in-memory
+  `lastDeathTime` map stays as a same-server fast path. `getLastPenaltyMs` fails soft (returns 0) if the
+  table is missing, so the cooldown can never break normal player-data access.
+- Set `death_cooldown_ms` above your typical switch time (e.g. 15000) for the fake-death case to be
+  covered; the shipped default (5000) only covers fast transfers.
 - `onDisable`'s `saveAllOnlinePlayers()` does synchronous DB I/O on the main thread on purpose, so no player
   data is lost at shutdown. Everything else (`/lp backup now`, backups, quit-saves, eat/penalty writes) runs
   off the tick thread.

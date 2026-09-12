@@ -304,26 +304,18 @@ public class PeachListener implements Listener {
                 // 同一次逻辑只取一次管理器：热切换数据库期间引用会被替换，
                 // 分别调用可能"从旧库读、往新库写"
                 final DatabaseManager db = plugin.getDatabaseManager();
-                double loadedBonus = 0;
-                boolean saved = false;
-                try {
-                    if (db != null) {
-                        DatabaseManager.PlayerHealthData healthData = db.loadCompletePlayerData(playerId);
-                        loadedBonus = healthData.getPeachBonus();
-                        saved = db.savePlayerData(playerId, playerName, loadedBonus + config.healthBonus, currentHealth);
-                    }
-                } catch (Exception e) {
-                    plugin.getLogger().severe("吃桃处理失败: " + e.getMessage());
-                }
+                // 读-加-写在同一把锁内完成，避免与死亡惩罚等并发写入互相覆盖
+                Double updated = db == null ? null
+                    : db.addPeachBonus(playerId, playerName, config.healthBonus, currentHealth);
 
-                if (!saved) {
+                if (updated == null) {
                     // 数据库写入失败：把吃掉的蟠桃退还给玩家，避免白白损失
                     eatingPlayers.remove(playerId);
                     refundPeach(player, config);
                     return;
                 }
 
-                final double newPeachBonus = loadedBonus + config.healthBonus;
+                final double newPeachBonus = updated;
 
                 // 在主线程中应用peach_bonus
                 plugin.runSync(() -> {
@@ -454,6 +446,7 @@ public class PeachListener implements Listener {
         double maxPenalty = penaltyConfig[2];
 
         final String playerName = player.getName();
+        final long deathTime = currentTime;
         plugin.runAsync(() -> {
             final DatabaseManager db = plugin.getDatabaseManager();
             if (db == null) {
@@ -461,6 +454,24 @@ public class PeachListener implements Listener {
                 return;
             }
             try {
+                // 跨服冷却校验：本服内存里可能没有记录（切服/重进/假死后被转移过来），
+                // 但共享库里记着上一次扣罚时间。假死导致同一次死亡在两个服各触发一次
+                // PlayerDeathEvent 时，靠这里拦住第二次扣除。
+                long lastPenalty = db.getLastPenaltyMs(playerId);
+                if (lastPenalty > 0 && (deathTime - lastPenalty) < deathCooldown) {
+                    pendingDeathPenalty.remove(playerId);
+                    plugin.runSync(() -> {
+                        if (player.isOnline()) {
+                            player.sendMessage(plugin.getMessageManager().getPrefixedMessage("death_cooldown"));
+                        }
+                    });
+                    if (plugin.isDebug()) {
+                        plugin.getLogger().info("玩家 " + playerName + " 处于跨服死亡冷却中（"
+                            + (deathTime - lastPenalty) + "ms < " + deathCooldown + "ms），本次不扣罚");
+                    }
+                    return;
+                }
+
                 DatabaseManager.PlayerHealthData healthData = db.loadCompletePlayerData(playerId);
                 double currentPeachBonus = healthData.getPeachBonus();
 
@@ -473,8 +484,8 @@ public class PeachListener implements Listener {
                 double penalty = Math.max(minPenalty, Math.min(maxPenalty, currentPeachBonus * penaltyPercentage));
                 final double newPeachBonus = Math.max(0, currentPeachBonus - penalty);
 
-                // 暂存惩罚信息，延迟恢复时再保存正确的 current_health
-                if (!db.savePlayerData(playerId, playerName, newPeachBonus)) {
+                // 写入扣罚结果，同时记录冷却时间戳（保留 current_health）
+                if (!db.saveDeathPenalty(playerId, newPeachBonus, deathTime)) {
                     // 写库失败就不能改本地 modifier，否则数据库与玩家血条会不一致
                     plugin.getLogger().severe("死亡惩罚写入失败，本次不扣罚: " + playerName);
                     pendingDeathPenalty.remove(playerId);
@@ -493,7 +504,9 @@ public class PeachListener implements Listener {
                                 plugin.updateHealthScale(player);
                                 player.setHealth(Math.min(player.getHealth(), attr.getValue()));
                             }
-                            db.savePlayerData(playerId, player.getName(), newPeachBonus, player.getHealth());
+                            // 只更新血量列：加成上一步已经写过绝对值，
+                            // 这里再写一次会在并发吃桃时把新加成覆盖回去
+                            db.updateCurrentHealth(playerId, player.getHealth());
 
                             String penaltyMsg = plugin.getMessageManager().getPrefixedMessage("death_penalty");
                             player.sendMessage(formatDeathPenaltyMessage(penaltyMsg, penalty, newPeachBonus));
