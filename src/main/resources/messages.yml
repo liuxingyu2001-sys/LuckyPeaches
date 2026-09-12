@@ -5,6 +5,7 @@ prefix: "&e[幸运蟠桃] "
 # 注意：消息模板请勿写裸 % 号（例如 100%），否则会被当成格式化占位符
 success: "&a蟠桃血量 &e+%bonus% &7| &a当前蟠桃血量: &e%peach_health%"
 fail: "&c什么也没发生... &7当前蟠桃血量: &e%peach_health%"
+eat_save_failed: "&c数据保存失败，蟠桃已退回，请稍后再试或联系管理员。"
 no_permission: "&c你没有权限执行此操作。"
 give_success: "&a已将 %peach% x%amount% 发送给 %player%"
 give_dropped: "&e背包已满，%amount% 个 %peach% &e已掉落在地上"

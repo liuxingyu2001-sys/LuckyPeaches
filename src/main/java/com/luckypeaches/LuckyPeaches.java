@@ -5,7 +5,11 @@ import org.bukkit.plugin.java.JavaPlugin;
 public class LuckyPeaches extends JavaPlugin {
     private static LuckyPeaches instance;
     private PeachManager peachManager;
-    private DatabaseManager databaseManager;
+    /**
+     * volatile：热切换数据库时由主线程替换该引用，而吃桃/退出保存等异步线程也在读它，
+     * 非 volatile 时异步线程可能长期看到已被关闭的旧实例。
+     */
+    private volatile DatabaseManager databaseManager;
     private BackupManager backupManager;
     private MessageManager messageManager;
     private PeachListener peachListener;

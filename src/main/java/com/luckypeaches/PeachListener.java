@@ -167,7 +167,11 @@ public class PeachListener implements Listener {
         // 非屏蔽世界：异步从数据库校验蟠桃加成，确保多端切换后血量正确
         final UUID joiningPlayerId = playerId;
         plugin.runAsync(() -> {
-            double peachBonus = plugin.getDatabaseManager().loadPlayerData(joiningPlayerId);
+            DatabaseManager db = plugin.getDatabaseManager();
+            if (db == null) {
+                return;
+            }
+            double peachBonus = db.loadPlayerData(joiningPlayerId);
 
             plugin.runSync(() -> {
                 if (!player.isOnline()) return;
@@ -220,8 +224,12 @@ public class PeachListener implements Listener {
             }
             // 直接读取数据库中的peach_bonus，不重新计算
             // 这样可以避免被其他插件的基础生命值修改影响
-            DatabaseManager.PlayerHealthData healthData = plugin.getDatabaseManager().loadCompletePlayerData(playerId);
-            plugin.getDatabaseManager().savePlayerData(playerId, playerName, healthData.getPeachBonus(), currentHealth);
+            DatabaseManager db = plugin.getDatabaseManager();
+            if (db == null) {
+                return;
+            }
+            DatabaseManager.PlayerHealthData healthData = db.loadCompletePlayerData(playerId);
+            db.savePlayerData(playerId, playerName, healthData.getPeachBonus(), currentHealth);
         }, 20L); // 延迟1秒（20 ticks）
     }
 
@@ -294,57 +302,69 @@ public class PeachListener implements Listener {
             final double currentHealth = player.getHealth();
             final String playerName = player.getName();
             plugin.runAsync(() -> {
+                // 同一次逻辑只取一次管理器：热切换数据库期间引用会被替换，
+                // 分别调用可能"从旧库读、往新库写"
+                final DatabaseManager db = plugin.getDatabaseManager();
+                double loadedBonus = 0;
+                boolean saved = false;
                 try {
-                    DatabaseManager.PlayerHealthData healthData =
-                        plugin.getDatabaseManager().loadCompletePlayerData(playerId);
-                    double newPeachBonus = healthData.getPeachBonus() + config.healthBonus;
-
-                    // 保存新的peach_bonus
-                    plugin.getDatabaseManager().savePlayerData(playerId, playerName, newPeachBonus, currentHealth);
-
-                    // 在主线程中应用peach_bonus
-                    plugin.runSync(() -> {
-                        try {
-                            if (!player.isOnline()) return;
-
-                            // 使用AttributeModifier应用peach_bonus，不修改基础生命值
-                            AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
-                            if (attr == null) return;
-
-                            // 异步间隙玩家可能已进入屏蔽世界，此时不套用加成（数值已入库，离开屏蔽世界后恢复）
-                            if (!playersInDisabledWorld.contains(playerId)) {
-                                // 保存当前血量，防止移除 modifier 时被截断
-                                double healthBefore = player.getHealth();
-                                HealthModifierUtil.applyPeachBonus(attr, newPeachBonus);
-
-                                // 恢复血量到新上限以内
-                                player.setHealth(Math.min(healthBefore + config.healthBonus, attr.getValue()));
-
-                                // 更新缩放
-                                plugin.updateHealthScale(player);
-                            }
-
-                            // 粒子效果
-                            if (plugin.getConfig().getBoolean("settings.enable_particles", true)) {
-                                player.spawnParticle(Particle.HEART, player.getLocation().add(0, 1, 0), 15, 0.5, 0.5, 0.5, 0.1);
-                                player.spawnParticle(Particle.HAPPY_VILLAGER, player.getLocation().add(0, 1, 0), 10, 0.5, 0.5, 0.5, 0.1);
-                            }
-
-                            // 成功音效
-                            playConfiguredSound(player, "settings.success_sound", "ENTITY_PLAYER_LEVELUP", 1.2f);
-
-                            // 格式化健康值显示，保留一位小数
-                            player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("success",
-                                "%bonus%", String.format("%.1f", config.healthBonus),
-                                PLACEHOLDER_PEACH_HEALTH, String.format("%.1f", newPeachBonus)));
-                        } finally {
-                            eatingPlayers.remove(playerId);
-                        }
-                    });
+                    if (db != null) {
+                        DatabaseManager.PlayerHealthData healthData = db.loadCompletePlayerData(playerId);
+                        loadedBonus = healthData.getPeachBonus();
+                        saved = db.savePlayerData(playerId, playerName, loadedBonus + config.healthBonus, currentHealth);
+                    }
                 } catch (Exception e) {
                     plugin.getLogger().severe("吃桃处理失败: " + e.getMessage());
-                    eatingPlayers.remove(playerId);
                 }
+
+                if (!saved) {
+                    // 数据库写入失败：把吃掉的蟠桃退还给玩家，避免白白损失
+                    eatingPlayers.remove(playerId);
+                    refundPeach(player, config);
+                    return;
+                }
+
+                final double newPeachBonus = loadedBonus + config.healthBonus;
+
+                // 在主线程中应用peach_bonus
+                plugin.runSync(() -> {
+                    try {
+                        if (!player.isOnline()) return;
+
+                        // 使用AttributeModifier应用peach_bonus，不修改基础生命值
+                        AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+                        if (attr == null) return;
+
+                        // 异步间隙玩家可能已进入屏蔽世界，此时不套用加成（数值已入库，离开屏蔽世界后恢复）
+                        if (!playersInDisabledWorld.contains(playerId)) {
+                            // 保存当前血量，防止移除 modifier 时被截断
+                            double healthBefore = player.getHealth();
+                            HealthModifierUtil.applyPeachBonus(attr, newPeachBonus);
+
+                            // 恢复血量到新上限以内
+                            player.setHealth(Math.min(healthBefore + config.healthBonus, attr.getValue()));
+
+                            // 更新缩放
+                            plugin.updateHealthScale(player);
+                        }
+
+                        // 粒子效果
+                        if (plugin.getConfig().getBoolean("settings.enable_particles", true)) {
+                            player.spawnParticle(Particle.HEART, player.getLocation().add(0, 1, 0), 15, 0.5, 0.5, 0.5, 0.1);
+                            player.spawnParticle(Particle.HAPPY_VILLAGER, player.getLocation().add(0, 1, 0), 10, 0.5, 0.5, 0.5, 0.1);
+                        }
+
+                        // 成功音效
+                        playConfiguredSound(player, "settings.success_sound", "ENTITY_PLAYER_LEVELUP", 1.2f);
+
+                        // 格式化健康值显示，保留一位小数
+                        player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("success",
+                            "%bonus%", String.format("%.1f", config.healthBonus),
+                            PLACEHOLDER_PEACH_HEALTH, String.format("%.1f", newPeachBonus)));
+                    } finally {
+                        eatingPlayers.remove(playerId);
+                    }
+                });
             });
         } else {
             // 失败音效
@@ -353,6 +373,26 @@ public class PeachListener implements Listener {
             player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("fail",
                 PLACEHOLDER_PEACH_HEALTH, String.format("%.1f", currentPeachBonus)));
         }
+    }
+
+    /**
+     * 数据库写入失败时把吃掉的蟠桃退回（背包满则掉落在原地）
+     */
+    private void refundPeach(Player player, PeachManager.PeachConfig config) {
+        plugin.runSync(() -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            ItemStack refund = plugin.getPeachManager().createPeachItem(config.id, 1);
+            if (refund == null) {
+                return;
+            }
+            java.util.Map<Integer, ItemStack> leftover = player.getInventory().addItem(refund);
+            for (ItemStack drop : leftover.values()) {
+                player.getWorld().dropItemNaturally(player.getLocation(), drop);
+            }
+            player.sendMessage(plugin.getMessageManager().getPrefixedMessage("eat_save_failed"));
+        });
     }
 
     /**
@@ -410,9 +450,12 @@ public class PeachListener implements Listener {
 
         final String playerName = player.getName();
         plugin.runAsync(() -> {
+            final DatabaseManager db = plugin.getDatabaseManager();
+            if (db == null) {
+                return;
+            }
             try {
-                DatabaseManager.PlayerHealthData healthData =
-                    plugin.getDatabaseManager().loadCompletePlayerData(playerId);
+                DatabaseManager.PlayerHealthData healthData = db.loadCompletePlayerData(playerId);
                 double currentPeachBonus = healthData.getPeachBonus();
 
                 // 检查蟠桃加成是否超过阈值（而不是检查总生命值）
@@ -427,7 +470,7 @@ public class PeachListener implements Listener {
                 final double newPeachBonus = Math.max(0, currentPeachBonus - penalty);
 
                 // 暂存惩罚信息，延迟恢复时再保存正确的 current_health
-                plugin.getDatabaseManager().savePlayerData(playerId, playerName, newPeachBonus);
+                db.savePlayerData(playerId, playerName, newPeachBonus);
 
                 long restoreDelay = plugin.getConfig().getLong("settings.death_penalty.restore_delay_ticks", 2L);
                 plugin.runSyncLater(() -> {
@@ -441,7 +484,7 @@ public class PeachListener implements Listener {
                                 plugin.updateHealthScale(player);
                                 player.setHealth(Math.min(player.getHealth(), attr.getValue()));
                             }
-                            plugin.getDatabaseManager().savePlayerData(playerId, player.getName(), newPeachBonus, player.getHealth());
+                            db.savePlayerData(playerId, player.getName(), newPeachBonus, player.getHealth());
 
                             String penaltyMsg = plugin.getMessageManager().getPrefixedMessage("death_penalty");
                             player.sendMessage(formatDeathPenaltyMessage(penaltyMsg, penalty, newPeachBonus));
@@ -561,7 +604,11 @@ public class PeachListener implements Listener {
 
         UUID playerId = player.getUniqueId();
         plugin.runAsync(() -> {
-            double peachBonus = plugin.getDatabaseManager().loadCompletePlayerData(playerId).getPeachBonus();
+            DatabaseManager db = plugin.getDatabaseManager();
+            if (db == null) {
+                return;
+            }
+            double peachBonus = db.loadCompletePlayerData(playerId).getPeachBonus();
 
             if (peachBonus <= 0) {
                 return;

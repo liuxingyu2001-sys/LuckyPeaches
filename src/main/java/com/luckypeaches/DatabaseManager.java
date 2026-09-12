@@ -61,6 +61,11 @@ public class DatabaseManager {
     private Connection sqliteConnection;
     private HikariDataSource hikariPool;
     private final Object dbLock = new Object();
+    /**
+     * 已关闭标记：close() 之后任何迟到的调用都不应再懒重连，
+     * 否则会打开一个再也没人关闭的连接（连接 + 文件锁泄漏）。
+     */
+    private volatile boolean closed = false;
 
     /** 使用当前配置中的数据库类型 */
     public DatabaseManager(LuckyPeaches plugin) {
@@ -96,6 +101,7 @@ public class DatabaseManager {
      * @return 初始化是否成功；失败时调用方应停止使用本实例
      */
     public boolean initialize() {
+        closed = false;
         if (useMysql) {
             initMySQL();
         } else {
@@ -119,6 +125,9 @@ public class DatabaseManager {
 
     /** 连接是否已就绪（供初始化校验与健康检查） */
     public boolean isConnected() {
+        if (closed) {
+            return false;
+        }
         if (useMysql) {
             return hikariPool != null && !hikariPool.isClosed();
         }
@@ -155,13 +164,16 @@ public class DatabaseManager {
     // ========== MySQL ==========
 
     private void initMySQL() {
+        // 一次性取配置快照：initMySQL 可能在异步迁移线程执行，
+        // 逐项重复调用 getConfig() 时若正好发生热重载，连接参数可能来自不同的配置实例
+        org.bukkit.configuration.file.FileConfiguration cfg = plugin.getConfig();
         try {
-            String host = plugin.getConfig().getString("settings.database.mysql.host", "localhost");
-            int port = plugin.getConfig().getInt("settings.database.mysql.port", 3306);
-            String database = plugin.getConfig().getString("settings.database.mysql.database", "luckypeaches");
-            String username = plugin.getConfig().getString("settings.database.mysql.username", "root");
-            String password = plugin.getConfig().getString("settings.database.mysql.password", "");
-            int maxConnections = plugin.getConfig().getInt("settings.database.mysql.max_connections", 10);
+            String host = cfg.getString("settings.database.mysql.host", "localhost");
+            int port = cfg.getInt("settings.database.mysql.port", 3306);
+            String database = cfg.getString("settings.database.mysql.database", "luckypeaches");
+            String username = cfg.getString("settings.database.mysql.username", "root");
+            String password = cfg.getString("settings.database.mysql.password", "");
+            int maxConnections = cfg.getInt("settings.database.mysql.max_connections", 10);
 
             // 库名会被拼进 SQL，做白名单校验避免配置写错导致语法错误/注入
             if (database == null || !database.matches("[A-Za-z0-9_$]+")) {
@@ -230,6 +242,9 @@ public class DatabaseManager {
     // ========== 连接获取 ==========
 
     private synchronized Connection getConnection() throws SQLException {
+        if (closed) {
+            throw new SQLException("数据库已关闭");
+        }
         if (useMysql) {
             if (hikariPool == null || hikariPool.isClosed()) {
                 throw new SQLException("MySQL 连接池未初始化或已关闭");
@@ -363,7 +378,15 @@ public class DatabaseManager {
 
     // ========== 保存 ==========
 
-    public void savePlayerData(UUID uuid, String username, double peachBonus, double currentHealth) {
+    /**
+     * 保存玩家数据
+     *
+     * @return 是否写入成功（失败时调用方可以进行补偿，例如退回消耗掉的蟠桃）
+     */
+    public boolean savePlayerData(UUID uuid, String username, double peachBonus, double currentHealth) {
+        if (closed) {
+            return false;
+        }
         synchronized (dbLock) {
             try {
                 executeQuery(conn -> {
@@ -376,15 +399,20 @@ public class DatabaseManager {
                     }
                     return null;
                 });
+                return true;
             } catch (SQLException e) {
                 plugin.getLogger().severe("保存玩家数据失败: " + e.getMessage());
+                return false;
             }
         }
     }
 
-    public void savePlayerData(UUID uuid, String username, double peachBonus) {
+    /**
+     * 保存蟠桃加成，保留数据库里已有的 current_health
+     */
+    public boolean savePlayerData(UUID uuid, String username, double peachBonus) {
         PlayerHealthData currentData = loadCompletePlayerData(uuid);
-        savePlayerData(uuid, username, peachBonus, currentData.getCurrentHealth());
+        return savePlayerData(uuid, username, peachBonus, currentData.getCurrentHealth());
     }
 
     // ========== 加载 ==========
@@ -580,6 +608,7 @@ public class DatabaseManager {
     // ========== 关闭 ==========
 
     public void close() {
+        closed = true;
         if (useMysql) {
             closePool();
         } else {

@@ -87,9 +87,11 @@ public class BackupManager {
     }
 
     private boolean doBackup() {
+        // 取一次配置快照：本方法常在异步线程执行，逐项读配置可能在热重载期间拿到不一致的值
+        org.bukkit.configuration.file.FileConfiguration cfg = plugin.getConfig();
         File dataFolder = plugin.getDataFolder();
 
-        File backupFolder = new File(dataFolder, plugin.getConfig().getString("settings.database_backup.backup_folder", "backups"));
+        File backupFolder = new File(dataFolder, cfg.getString("settings.database_backup.backup_folder", "backups"));
         if (!backupFolder.exists() && !backupFolder.mkdirs()) {
             plugin.getLogger().severe("备份目录创建失败: " + backupFolder.getAbsolutePath());
             return false;
@@ -107,7 +109,7 @@ public class BackupManager {
         boolean success;
         if (dbManager.isMysql()) {
             // MySQL 模式：导出为 YML 或 JSON
-            String format = plugin.getConfig().getString("settings.database_backup.format", "yml");
+            String format = cfg.getString("settings.database_backup.format", "yml");
             String ext = "json".equalsIgnoreCase(format) ? "json" : "yml";
             success = backupToFile(new File(backupFolder, "backup_" + timestamp + "." + ext), ext);
         } else {
@@ -117,7 +119,7 @@ public class BackupManager {
 
         if (success) {
             plugin.getLogger().info("数据库备份成功");
-            cleanupOldBackups(backupFolder);
+            cleanupOldBackups(backupFolder, cfg.getInt("settings.database_backup.max_backups", 7));
         }
         return success;
     }
@@ -191,8 +193,8 @@ public class BackupManager {
     /**
      * 清理旧备份文件
      */
-    private void cleanupOldBackups(File backupFolder) {
-        int maxBackups = Math.max(1, plugin.getConfig().getInt("settings.database_backup.max_backups", 7));
+    private void cleanupOldBackups(File backupFolder, int configuredMaxBackups) {
+        int maxBackups = Math.max(1, configuredMaxBackups);
 
         File[] backupFiles = backupFolder.listFiles((dir, name) -> name.startsWith("backup_"));
         if (backupFiles == null || backupFiles.length <= maxBackups) {

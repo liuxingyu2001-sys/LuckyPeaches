@@ -187,6 +187,20 @@ PeachIntegrationAPI.clearNonPeachModifiers(player);
 
 ## 更新日志
 
+### v2.2.2
+- **数据库写入失败会退回蟠桃**：吃桃时若数据库写入失败，消耗掉的道具会退回背包（满则掉落原地）并提示
+  `eat_save_failed`，不再让玩家白白损失道具
+- **数据库关闭后不再懒重连**：`close()` 之后迟到的查询直接失败，而不是偷偷重开一个再也没人关闭的
+  SQLite 连接（连接 + 文件锁泄漏）
+- **同一次逻辑只取一次 DatabaseManager**：`databaseManager` 改为 `volatile`，吃桃/退出保存/死亡惩罚/登录
+  校验都先取本地引用再用，避免热切换瞬间"从旧库读、往新库写"或命中已关闭的旧库
+- **MySQL 连接参数一次性快照**：`initMySQL()` 在异步迁移线程执行，不再逐项重复读配置，
+  避免热重载期间连接参数来自两份不同的配置实例
+- **备份配置一次性快照**：备份线程同样取一次配置快照（备份目录/格式/保留份数）
+- **已实测**：本机 MySQL 不可用时 `/lp db mysql` 迁移失败会**保留 SQLite 与配置文件**
+  （`settings.database.type` 不会被改写）、插件继续正常服务；配置里手改 `type` 后
+  热重载或 `/lp reload` 都会明确提示改用 `/lp db` 迁移
+
 ### v2.2.1
 - **修复内存/资源泄漏**：默认配置与消息文件的 jar 资源流未关闭；插件卸载时未清理静态集合
   （`playersInDisabledWorld`、`playersMaxHealthWorld`、`lastDeathTime`、`eatingPlayers`、

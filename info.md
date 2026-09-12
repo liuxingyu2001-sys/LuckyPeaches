@@ -92,6 +92,21 @@ Entries are removed on quit, but a task cancelled at plugin shutdown never reach
 `onDisable()` calls `PeachListener.clearRuntimeState()` + `PeachIntegrationAPI.clearAllBattleStatus()` and
 nulls the static `instance`. **Any new static collection must be cleared there too.**
 
+### Known limitations (reviewed, deliberately not changed)
+
+- **Multi-server MySQL `peach_bonus` increment is read-modify-write**, not an atomic
+  `UPDATE ... SET peach_bonus = peach_bonus + ?`. A player is only ever on one backend at a time, so the race
+  window is limited to a delayed quit-save (~1s) overlapping a fast re-login on another server. Making it
+  atomic needs dialect-specific UPSERT SQL that cannot be tested in this environment, so it is left as-is
+  (the failure mode of shipping wrong SQL — every eat failing — is worse than the rare lost increment).
+- `current_health` is effectively a vestigial column: nothing reads it for gameplay (the 3-arg
+  `savePlayerData` only carries it forward). Death-penalty saves can therefore write `0` there.
+- `onDisable`'s `saveAllOnlinePlayers()` does synchronous DB I/O on the main thread on purpose, so no player
+  data is lost at shutdown. Everything else (`/lp backup now`, backups, quit-saves, eat/penalty writes) runs
+  off the tick thread.
+- Delayed tasks (quit-save, world-exit restore) are cancelled by Bukkit when the plugin disables. Bonuses are
+  unaffected (they live in the DB); `saveAllOnlinePlayers()` covers online players at shutdown.
+
 ### Config merge gotcha
 
 `Configuration.contains(path)` falls back to the section's `defaults`. The plugin config always has defaults
