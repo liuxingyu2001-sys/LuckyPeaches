@@ -387,19 +387,15 @@ public class LuckyPeaches extends JavaPlugin {
         for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {
             try {
                 final java.util.UUID playerId = player.getUniqueId();
-                final String playerName = player.getName();
                 final double currentHealth = player.getHealth();
 
-                DatabaseManager.PlayerHealthData healthData = databaseManager.loadCompletePlayerData(playerId);
-                double peachBonus = healthData.getPeachBonus();
-
                 if (debug) {
-                    getLogger().info("保存玩家 " + playerName + " 的数据: " +
-                        "数据库蟠桃加成=" + peachBonus + ", " +
-                        "当前血量=" + currentHealth);
+                    getLogger().info("保存玩家 " + player.getName() + " 的血量: " + currentHealth);
                 }
 
-                databaseManager.savePlayerData(playerId, playerName, peachBonus, currentHealth);
+                // 只更新血量列：蟠桃加成在发生变化时（吃桃/死亡惩罚/sethealth）就已入库，
+                // 这里再"读出来写回去"只会在数据库卡顿时把并发写入覆盖成旧值
+                databaseManager.updateCurrentHealth(playerId, currentHealth);
             } catch (Exception e) {
                 getLogger().severe("保存玩家 " + player.getName() + " 数据失败: " + e.getMessage());
             }

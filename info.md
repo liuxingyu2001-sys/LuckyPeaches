@@ -101,6 +101,11 @@ nulls the static `instance`. **Any new static collection must be cleared there t
   (the failure mode of shipping wrong SQL — every eat failing — is worse than the rare lost increment).
 - `current_health` is effectively a vestigial column: nothing reads it for gameplay (the 3-arg
   `savePlayerData` only carries it forward). Death-penalty saves can therefore write `0` there.
+  It is still maintained through `updateCurrentHealth()`, which never rewrites `peach_bonus`.
+- The death-penalty **cooldown is in-memory per server** (`lastDeathTime`), not persisted. In a group
+  server the cooldown therefore does not apply across a switch: die on A, switch to B, die again inside
+  what would have been the cooldown window → charged twice (two real deaths, one uncooled). Persisting it
+  needs a new column in the shared table.
 - `onDisable`'s `saveAllOnlinePlayers()` does synchronous DB I/O on the main thread on purpose, so no player
   data is lost at shutdown. Everything else (`/lp backup now`, backups, quit-saves, eat/penalty writes) runs
   off the tick thread.

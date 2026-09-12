@@ -222,14 +222,13 @@ public class PeachListener implements Listener {
             if (pendingDeathPenalty.contains(playerId)) {
                 return;
             }
-            // 直接读取数据库中的peach_bonus，不重新计算
-            // 这样可以避免被其他插件的基础生命值修改影响
             DatabaseManager db = plugin.getDatabaseManager();
             if (db == null) {
                 return;
             }
-            DatabaseManager.PlayerHealthData healthData = db.loadCompletePlayerData(playerId);
-            db.savePlayerData(playerId, playerName, healthData.getPeachBonus(), currentHealth);
+            // 只更新 current_health：绝不重写 peach_bonus，
+            // 否则数据库卡顿时这次"读旧值再写回"会把并发的吃桃/死亡惩罚结果覆盖掉
+            db.updateCurrentHealth(playerId, currentHealth);
         }, 20L); // 延迟1秒（20 ticks）
     }
 
@@ -441,6 +440,12 @@ public class PeachListener implements Listener {
 
         lastDeathTime.put(playerId, currentTime);
 
+        // 同步打标记：标记必须覆盖"死亡 → 异步扣罚写入完成"的整个窗口。
+        // 如果只在异步任务里打标记，玩家死亡后立刻退出/切服时，退出保存可能抢在扣罚写入之前，
+        // 把旧加成写回去，导致这次死亡惩罚白白失效（可被"死了就秒退"利用）。
+        // 每一个不扣罚的出口都要负责移除该标记。
+        pendingDeathPenalty.add(playerId);
+
         double healthThreshold = plugin.getConfig().getDouble("settings.death_penalty.health_threshold", 50.0);
 
         double[] penaltyConfig = getPenaltyConfig(player);
@@ -452,6 +457,7 @@ public class PeachListener implements Listener {
         plugin.runAsync(() -> {
             final DatabaseManager db = plugin.getDatabaseManager();
             if (db == null) {
+                pendingDeathPenalty.remove(playerId);
                 return;
             }
             try {
@@ -460,17 +466,20 @@ public class PeachListener implements Listener {
 
                 // 检查蟠桃加成是否超过阈值（而不是检查总生命值）
                 if (currentPeachBonus <= healthThreshold || currentPeachBonus <= 0) {
+                    pendingDeathPenalty.remove(playerId);
                     return;
                 }
-
-                // 确认需要扣罚后才标记，避免提前 return 导致标记残留
-                pendingDeathPenalty.add(playerId);
 
                 double penalty = Math.max(minPenalty, Math.min(maxPenalty, currentPeachBonus * penaltyPercentage));
                 final double newPeachBonus = Math.max(0, currentPeachBonus - penalty);
 
                 // 暂存惩罚信息，延迟恢复时再保存正确的 current_health
-                db.savePlayerData(playerId, playerName, newPeachBonus);
+                if (!db.savePlayerData(playerId, playerName, newPeachBonus)) {
+                    // 写库失败就不能改本地 modifier，否则数据库与玩家血条会不一致
+                    plugin.getLogger().severe("死亡惩罚写入失败，本次不扣罚: " + playerName);
+                    pendingDeathPenalty.remove(playerId);
+                    return;
+                }
 
                 long restoreDelay = plugin.getConfig().getLong("settings.death_penalty.restore_delay_ticks", 2L);
                 plugin.runSyncLater(() -> {

@@ -415,6 +415,37 @@ public class DatabaseManager {
         return savePlayerData(uuid, username, peachBonus, currentData.getCurrentHealth());
     }
 
+    /**
+     * 只更新血量列，<b>绝不触碰 peach_bonus</b>。
+     *
+     * <p>退出保存 / 关服保存走这条路径。原来的实现是"读出 peach_bonus 再原样写回"，
+     * 在数据库卡顿（例如备份正持有 dbLock 做 VACUUM）时，这个"读-写"之间可能夹进
+     * 死亡惩罚或吃桃的写入，于是把已经扣掉/加上的加成覆盖回旧值 —— 惩罚会凭空失效。</p>
+     *
+     * @return 是否更新了记录（该玩家在库里还没有记录时返回 false，此时不会创建新记录）
+     */
+    public boolean updateCurrentHealth(UUID uuid, double currentHealth) {
+        if (closed) {
+            return false;
+        }
+        String sql = "UPDATE " + tableName + " SET current_health = ?, last_updated = "
+            + (useMysql ? "NOW()" : "CURRENT_TIMESTAMP") + " WHERE uuid = ?";
+        synchronized (dbLock) {
+            try {
+                return executeQuery(conn -> {
+                    try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                        pstmt.setDouble(1, currentHealth);
+                        pstmt.setString(2, uuid.toString());
+                        return pstmt.executeUpdate() > 0;
+                    }
+                });
+            } catch (SQLException e) {
+                plugin.getLogger().severe("更新玩家血量失败: " + e.getMessage());
+                return false;
+            }
+        }
+    }
+
     // ========== 加载 ==========
 
     public PlayerHealthData loadCompletePlayerData(UUID uuid) {
