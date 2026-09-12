@@ -187,6 +187,15 @@ PeachIntegrationAPI.clearNonPeachModifiers(player);
 
 ## 更新日志
 
+### v2.2.5
+- **修复回归：必须对着方块/地面右键才能吃桃**。v2.2.1 给右键处理加了 `event.isCancelled()` 早退，
+  而服务器上其它插件（自定义物品/技能/拦截类插件）经常会把"对着空气右键"整个取消掉，
+  于是空气右键不再能吃东西。服务端本身不会取消空气右键（已从 CraftBukkit 字节码确认
+  `CraftEventFactory` 以 `DEFAULT` 构造空气右键事件），所以取消只可能来自其它插件。
+  现在**故意不检查** `isCancelled()`（蟠桃是管理员发放的消耗品，直接放行）
+- 新增 debug 诊断：右键被其它插件取消时会打印一条日志，并（首次）列出所有
+  `ignoreCancelled=false` 的 `PlayerInteractEvent` 监听插件，便于定位是谁拦掉了空气右键
+
 ### v2.2.4
 - **死亡冷却改为跨服共享**：冷却时间戳持久化到数据库（新表 `<前缀>peach_death_cooldown`），
   用于拦截"假死 + 切服导致同一次死亡在两个服各触发一次 `PlayerDeathEvent`，被扣两次"的问题

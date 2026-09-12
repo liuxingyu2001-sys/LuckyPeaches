@@ -39,6 +39,8 @@ public class PeachListener implements Listener {
     private static final java.util.Map<UUID, Long> lastDeathTime = new java.util.concurrent.ConcurrentHashMap<>();
     private static final Set<UUID> eatingPlayers = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final Set<UUID> pendingDeathPenalty = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    /** 右键被取消的诊断列表只打印一次 */
+    private static final java.util.concurrent.atomic.AtomicBoolean interactDiagnosticLogged = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     public PeachListener(LuckyPeaches plugin) {
         this.plugin = plugin;
@@ -239,8 +241,14 @@ public class PeachListener implements Listener {
         // 仅处理右键点击
         if (event.getAction() != Action.RIGHT_CLICK_AIR && event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
 
-        // 已被其他插件（区域/保护/交互拦截）取消，不应消耗蟠桃
-        if (event.isCancelled()) return;
+        // 这里**故意不检查 event.isCancelled()**：
+        // 服务端本身不会取消空气右键（CraftEventFactory 以 DEFAULT 构造），但服务器上其它插件
+        // 常常会把"对着空气右键"整个取消掉（自定义物品/拦截类插件、区域插件的 use 判定等），
+        // 一旦尊重该取消，玩家就必须对着方块右键才吃得下蟠桃（v2.2.1 引入的回归）。
+        // 蟠桃是管理员发放的消耗品，直接放行即可；debug 模式下会打印诊断，便于排查是谁取消的。
+        if (event.isCancelled() && plugin.isDebug()) {
+            logInteractCancellationDiagnostics(event);
+        }
 
         ItemStack item = event.getItem();
         if (item == null) return;
@@ -384,6 +392,34 @@ public class PeachListener implements Listener {
             }
             player.sendMessage(plugin.getMessageManager().getPrefixedMessage("eat_save_failed"));
         });
+    }
+
+    /**
+     * 诊断：右键事件在到达本插件之前已被别的插件取消。
+     *
+     * <p>只在 debug 模式触发；第一次会列出所有未设置 ignoreCancelled 的 PlayerInteractEvent 监听插件
+     * （ignoreCancelled=true 的监听器不可能取消事件），据此可以定位是哪个插件把空气右键拦掉了。</p>
+     */
+    private void logInteractCancellationDiagnostics(PlayerInteractEvent event) {
+        plugin.getLogger().info("[诊断] 玩家 " + event.getPlayer().getName() + " 的蟠桃右键事件已被其它插件取消"
+            + "（action=" + event.getAction() + ", useInteractedBlock=" + event.useInteractedBlock()
+            + ", useItemInHand=" + event.useItemInHand() + "），仍按蟠桃处理。");
+
+        if (!interactDiagnosticLogged.compareAndSet(false, true)) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (org.bukkit.plugin.RegisteredListener listener : event.getHandlers().getRegisteredListeners()) {
+            if (listener.isIgnoringCancelled()) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(listener.getPlugin().getName()).append('(').append(listener.getPriority()).append(')');
+        }
+        plugin.getLogger().info("[诊断] PlayerInteractEvent 监听者（ignoreCancelled=false，按注册顺序）: " + sb);
+        plugin.getLogger().info("[诊断] 取消事件的插件必然是上面列表中排在本插件（NORMAL/NORMAL）之前的那几个。");
     }
 
     /**

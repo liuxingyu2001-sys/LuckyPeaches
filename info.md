@@ -141,6 +141,16 @@ back on the main thread: persist `settings.database.type`, swap the manager, clo
 failed switch leaves the old database and config untouched. Player snapshots (UUID/name/health) are captured
 on the main thread BEFORE the async task — never call Bukkit API from the async thread.
 
+### Interact handling: never gate on `isCancelled()`
+
+`PeachListener.onInteract` deliberately does **not** return early on `event.isCancelled()`.
+The server never cancels an air right-click itself (`CraftEventFactory` builds RIGHT_CLICK_AIR with
+`Result.DEFAULT`; verified in the server jar bytecode), so a cancelled event can only come from another
+plugin — and many plugins cancel air right-clicks globally (custom-item/skill/intercept listeners).
+Respecting that made peaches edible only while aiming at a block (regression in v2.2.1, reverted in v2.2.5).
+Debug mode logs the cancellation plus the list of `ignoreCancelled=false` PlayerInteractEvent listeners so the
+culprit can be identified.
+
 ### Death penalty message
 
 `messages.yml` `death_penalty` uses `%penalty%` / `%peach_health%`. The legacy `%.1f / %.1f` template is still
