@@ -33,7 +33,7 @@ cp target/Liu-LuckyPeaches-*.jar /home/p/          # production
 | `PeachListener.java` | Core logic — join/quit/interact/death/world-change handlers. `clearRuntimeState()` wipes the static per-player collections on disable. `refreshWorldStateForOnlinePlayers()` re-evaluates disabled-world / world-max state after a config reload. |
 | `PeachManager.java` | Peach item creation, CraftEngine integration with vanilla fallback. Clamps `chance` to `[0,1]`, `health_bonus >= 0`, giveaway amount ≤ `MAX_GIVE_AMOUNT`. |
 | `DatabaseManager.java` | Dual SQLite/MySQL. `executeQuery(DBAction)` callback pattern handles connection lifecycle. `initialize()` returns `false` when the DB is unusable. `isMysql()` is the single type accessor. |
-| `PeachCommand.java` | All `/lp` subcommands including `/lp db` hot-switch and `/lp clearhealth`. |
+| `PeachCommand.java` | All `/luckypeach` subcommands including `/luckypeach db` hot-switch and `/luckypeach clearhealth`. |
 | `BackupManager.java` | Auto-backup. SQLite: VACUUM INTO. MySQL: YML/JSON export. Re-entrancy guarded by an `AtomicBoolean`; interval clamped to ≥ 1h. |
 | `MessageManager.java` | i18n from `messages.yml` (loaded from `getConfigDir()`). `&` color codes. Caches the colored prefix. |
 | `PeachPlaceholder.java` | PlaceholderAPI expansion. Reads from AttributeModifier (no DB call). |
@@ -110,7 +110,7 @@ nulls the static `instance`. **Any new static collection must be cleared there t
 - Set `death_cooldown_ms` above your typical switch time (e.g. 15000) for the fake-death case to be
   covered; the shipped default (5000) only covers fast transfers.
 - `onDisable`'s `saveAllOnlinePlayers()` does synchronous DB I/O on the main thread on purpose, so no player
-  data is lost at shutdown. Everything else (`/lp backup now`, backups, quit-saves, eat/penalty writes) runs
+  data is lost at shutdown. Everything else (`/luckypeach backup now`, backups, quit-saves, eat/penalty writes) runs
   off the tick thread.
 - Delayed tasks (quit-save, world-exit restore) are cancelled by Bukkit when the plugin disables. Bonuses are
   unaffected (they live in the DB); `saveAllOnlinePlayers()` covers online players at shutdown.
@@ -132,7 +132,7 @@ All modifier work goes through `HealthModifierUtil.apply/remove/getAmount` (`app
 skips adding when `amount <= 0`, so no zero-value modifiers are left behind). Don't hand-roll the
 stream-filter-remove-add dance at new call sites.
 
-### Database hot-switch (`/lp db`)
+### Database hot-switch (`/luckypeach db`)
 
 Switches SQLite ↔ MySQL with data migration. Sequence: save online players → read all data → build the new
 `DatabaseManager` with the **explicit target type** (`new DatabaseManager(plugin, useMysql)`) → write data →
@@ -171,7 +171,7 @@ All deps are `provided` scope — the server supplies them at runtime via `libra
 
 ## Commands and permissions
 
-Main: `/luckypeach` (aliases: `/lp`, `/luckyp`). Requires `luckypeach.admin`.
+Main: `/luckypeach` (alias: `/luckyp`; `/lp` is reserved for LuckPerms). Requires `luckypeach.admin`.
 
 Permissions: `luckypeaches.maxhealth.<key>` (VIP health caps), `luckypeaches.deathpenalty.<key>` (death penalty groups).
 

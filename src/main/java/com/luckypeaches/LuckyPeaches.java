@@ -263,7 +263,7 @@ public class LuckyPeaches extends JavaPlugin {
 
     /**
      * 热重载不会重建数据库连接：配置里的 type 被改动时给出明确提示，
-     * 避免服务器以为换库成功（真正换库要走 /lp db，会迁移数据）。
+     * 避免服务器以为换库成功（真正换库要走 /luckypeach db，会迁移数据）。
      */
     private void warnIfDatabaseTypeMismatch() {
         if (databaseManager == null) {
@@ -273,7 +273,7 @@ public class LuckyPeaches extends JavaPlugin {
         if (configuredMysql != databaseManager.isMysql()) {
             getLogger().warning("配置中的数据库类型为 " + (configuredMysql ? "mysql" : "sqlite")
                 + "，但当前运行在 " + (databaseManager.isMysql() ? "MySQL" : "SQLite")
-                + " 上；热重载不会迁移数据，请使用 /lp db <mysql|sqlite> 切换。");
+                + " 上；热重载不会迁移数据，请使用 /luckypeach db <mysql|sqlite> 切换。");
         }
     }
 

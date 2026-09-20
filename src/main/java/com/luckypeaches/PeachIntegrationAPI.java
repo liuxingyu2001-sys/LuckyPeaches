@@ -33,7 +33,7 @@ public class PeachIntegrationAPI {
     /**
      * Temporarily suppress ONLY the peach health modifier. Call on the primary thread.
      * Repeated calls are idempotent. Restoring also works during quit/shutdown,
-     * without waiting for database tasks. Persistent peach totals are never changed.
+     * without waiting for database tasks. Persistent peach totals are never changed. Living players are healed to the restored maximum.
      */
     public static void setPeachBonusSuppressed(Player player, boolean suppressed) {
         if (player == null) return;
@@ -54,7 +54,8 @@ public class PeachIntegrationAPI {
             suppressedBonuses.remove(uuid);
         }
         double health = player.getHealth();
-        if (health > attr.getValue()) player.setHealth(attr.getValue());
+        if (!suppressed && !player.isDead() && health > 0) player.setHealth(attr.getValue());
+        else if (health > attr.getValue()) player.setHealth(attr.getValue());
         LuckyPeaches plugin = LuckyPeaches.getInstance();
         if (plugin != null) plugin.updateHealthScale(player);
     }
@@ -106,20 +107,23 @@ public class PeachIntegrationAPI {
             double peachBonus = plugin.getDatabaseManager().loadCompletePlayerData(playerId).getPeachBonus();
 
             long delayTicks = plugin.getConfig().getLong("world_integration.peach_restore_delay_ticks", 0L);
-            plugin.runSyncLater(() -> {
-                if (!player.isOnline() || isPlayerInBattle(playerId) || isWorldBlocked(player)) return;
-                org.bukkit.attribute.AttributeInstance attr =
-                    player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
-                if (attr == null) return;
-
-                // 仅在值变化时更新，避免不必要的视觉波动
-                if (Math.abs(HealthModifierUtil.getPeachBonus(attr) - peachBonus) > 0.001) {
-                    HealthModifierUtil.applyPeachBonus(player, attr, peachBonus);
-                    plugin.updateHealthScale(player);
-                    player.setHealth(Math.min(player.getHealth(), attr.getValue()));
-                }
-            }, delayTicks);
+            plugin.runSyncLater(() -> finishBattleRestore(player, peachBonus), delayTicks);
         });
+    }
+
+    /** Main-thread completion: heal even when the cached modifier already matches the database. */
+    static void finishBattleRestore(Player player, double peachBonus) {
+        UUID uuid = player.getUniqueId();
+        if (!player.isOnline() || isPlayerInBattle(uuid) || isPeachBonusSuppressed(uuid) || isWorldBlocked(player)) return;
+        org.bukkit.attribute.AttributeInstance attr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+        if (attr == null) return;
+        if (Math.abs(HealthModifierUtil.getPeachBonus(attr) - peachBonus) > 0.001) {
+            HealthModifierUtil.applyPeachBonus(player, attr, peachBonus);
+            LuckyPeaches plugin = LuckyPeaches.getInstance();
+            if (plugin != null) plugin.updateHealthScale(player);
+        }
+        // Never revive a dead player through setHealth; respawn/duel recovery owns that lifecycle.
+        if (!player.isDead() && player.getHealth() > 0) player.setHealth(attr.getValue());
     }
 
     /**

@@ -746,7 +746,7 @@ public class PeachListener implements Listener {
         double worldBonus = attr != null ? maxHealth - attr.getBaseValue() : 0;
 
         // 世界没变**且** modifier 数值已经正确时才跳过；
-        // 只比较世界名会让 /lp world setmax 与配置热重载对当前世界的玩家完全失效
+        // 只比较世界名会让 /luckypeach world setmax 与配置热重载对当前世界的玩家完全失效
         if (worldName.equals(playersMaxHealthWorld.get(playerUuid)) && attr != null) {
             double desired = Math.max(0.0, worldBonus);
             double current = HealthModifierUtil.getAmount(attr, WORLD_MAX_HEALTH_MODIFIER_UUID);

@@ -11,6 +11,6 @@ libraries:
   - com.zaxxer:HikariCP:5.1.0
 commands:
   luckypeach:
-    aliases: [luckyp, lp]
+    aliases: [luckyp]
     description: LuckyPeaches admin command.
     permission: luckypeach.admin

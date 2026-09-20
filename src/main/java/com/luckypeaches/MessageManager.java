@@ -79,15 +79,21 @@ public class MessageManager {
     }
 
     public String getMessage(String key) {
-        return messagesConfig.getString(key, "");
+        return getMessage(key, "");
     }
 
     public String getMessage(String key, String defaultValue) {
-        return messagesConfig.getString(key, defaultValue);
+        return commandHelp(key, messagesConfig.getString(key, defaultValue));
     }
 
     public List<String> getMessageList(String key) {
-        return messagesConfig.getStringList(key);
+        return messagesConfig.getStringList(key).stream().map(line -> commandHelp(key, line)).toList();
+    }
+
+    /** Old shared messages.yml may still contain the retired alias; do not overwrite custom text. */
+    private static String commandHelp(String key, String text) {
+        if (text == null || !(key.equals("help") || key.equals("db_help") || key.equals("db_type_mismatch"))) return text;
+        return text.replaceAll("/lp(?=\\s|$)", "/luckypeach");
     }
 
     public String getPrefix() {

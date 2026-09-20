@@ -83,7 +83,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         plugin.getBackupManager().restartBackupTask();
         plugin.reapplyModifiersForOnlinePlayers();
 
-        // 热重载不会重建数据库连接：配置里改了 type 必须走 /lp db 迁移
+        // 热重载不会重建数据库连接：配置里改了 type 必须走 /luckypeach db 迁移
         boolean configuredMysql = "mysql".equalsIgnoreCase(
             plugin.getConfig().getString("settings.database.type", "sqlite"));
         if (configuredMysql != plugin.getDatabaseManager().isMysql()) {
@@ -96,7 +96,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
     private void handleGetHealth(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage(ChatColor.RED + "用法: /lp gethealth <玩家>");
+            sender.sendMessage(ChatColor.RED + "用法: /luckypeach gethealth <玩家>");
             return;
         }
 
@@ -118,7 +118,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
     private void handleSetHealth(CommandSender sender, String[] args) {
         if (args.length < 3) {
-            sender.sendMessage(ChatColor.RED + "用法: /lp sethealth <玩家> <数值>");
+            sender.sendMessage(ChatColor.RED + "用法: /luckypeach sethealth <玩家> <数值>");
             return;
         }
 
@@ -171,7 +171,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
     private void handleClearHealth(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage(ChatColor.RED + "用法: /lp clearhealth <玩家|all>");
+            sender.sendMessage(ChatColor.RED + "用法: /luckypeach clearhealth <玩家|all>");
             return;
         }
 
@@ -199,7 +199,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
     private void handleGive(CommandSender sender, String[] args) {
         if (args.length < 3) {
-            sender.sendMessage(ChatColor.RED + "用法: /lp give <玩家> <ID> [数量]");
+            sender.sendMessage(ChatColor.RED + "用法: /luckypeach give <玩家> <ID> [数量]");
             return;
         }
 
@@ -250,7 +250,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
     private void handleBackup(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage(ChatColor.RED + "用法: /lp backup <now|list|enable|disable>");
+            sender.sendMessage(ChatColor.RED + "用法: /luckypeach backup <now|list|enable|disable>");
             return;
         }
 
@@ -289,28 +289,28 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage(ChatColor.YELLOW + "自动备份已禁用。");
                 break;
             default:
-                sender.sendMessage(ChatColor.RED + "用法: /lp backup <now|list|enable|disable>");
+                sender.sendMessage(ChatColor.RED + "用法: /luckypeach backup <now|list|enable|disable>");
                 break;
         }
     }
 
     private void handleWorld(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage(ChatColor.RED + "用法: /lp world <add|remove|list|setmax|getmax|listmax|removemax> [世界名称] [数值]");
+            sender.sendMessage(ChatColor.RED + "用法: /luckypeach world <add|remove|list|setmax|getmax|listmax|removemax> [世界名称] [数值]");
             return;
         }
 
         switch (args[1].toLowerCase(Locale.ROOT)) {
             case "add":
                 if (args.length < 3) {
-                    sender.sendMessage(ChatColor.RED + "用法: /lp world add <世界名称>");
+                    sender.sendMessage(ChatColor.RED + "用法: /luckypeach world add <世界名称>");
                     return;
                 }
                 handleWorldAdd(sender, args[2]);
                 break;
             case "remove":
                 if (args.length < 3) {
-                    sender.sendMessage(ChatColor.RED + "用法: /lp world remove <世界名称>");
+                    sender.sendMessage(ChatColor.RED + "用法: /luckypeach world remove <世界名称>");
                     return;
                 }
                 handleWorldRemove(sender, args[2]);
@@ -320,14 +320,14 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
                 break;
             case "setmax":
                 if (args.length < 4) {
-                    sender.sendMessage(ChatColor.RED + "用法: /lp world setmax <世界名称> <数值>");
+                    sender.sendMessage(ChatColor.RED + "用法: /luckypeach world setmax <世界名称> <数值>");
                     return;
                 }
                 handleWorldSetMax(sender, args[2], args[3]);
                 break;
             case "getmax":
                 if (args.length < 3) {
-                    sender.sendMessage(ChatColor.RED + "用法: /lp world getmax <世界名称>");
+                    sender.sendMessage(ChatColor.RED + "用法: /luckypeach world getmax <世界名称>");
                     return;
                 }
                 handleWorldGetMax(sender, args[2]);
@@ -337,13 +337,13 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
                 break;
             case "removemax":
                 if (args.length < 3) {
-                    sender.sendMessage(ChatColor.RED + "用法: /lp world removemax <世界名称>");
+                    sender.sendMessage(ChatColor.RED + "用法: /luckypeach world removemax <世界名称>");
                     return;
                 }
                 handleWorldRemoveMax(sender, args[2]);
                 break;
             default:
-                sender.sendMessage(ChatColor.RED + "用法: /lp world <add|remove|list|setmax|getmax|listmax|removemax> [世界名称] [数值]");
+                sender.sendMessage(ChatColor.RED + "用法: /luckypeach world <add|remove|list|setmax|getmax|listmax|removemax> [世界名称] [数值]");
                 break;
         }
     }
@@ -427,7 +427,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         }
 
         // 用 contains(path, true) 忽略 defaults：Bukkit 的 contains(path) 会把默认配置里的键
-        // 也判定为"已设置"，导致 /lp world getmax 报告一个实际不在 config.yml 里的值
+        // 也判定为"已设置"，导致 /luckypeach world getmax 报告一个实际不在 config.yml 里的值
         if (plugin.getConfig().contains("world_max_health.worlds." + worldName, true)) {
             double maxHealth = plugin.getConfig().getDouble("world_max_health.worlds." + worldName);
             sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("world_max_health_get",
@@ -601,8 +601,8 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length < 2) {
-            sender.sendMessage(ChatColor.RED + "用法: /lp import <sqlite文件路径>");
-            sender.sendMessage(ChatColor.GRAY + "示例: /lp import plugins/LuckyPeaches/data.db");
+            sender.sendMessage(ChatColor.RED + "用法: /luckypeach import <sqlite文件路径>");
+            sender.sendMessage(ChatColor.GRAY + "示例: /luckypeach import plugins/LuckyPeaches/data.db");
             return;
         }
 

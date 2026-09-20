@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class BackupManager {
     private final LuckyPeaches plugin;
     private int backupTaskId = -1;
-    /** 防止定时任务与 /lp backup now 并发写同一个备份文件 */
+    /** 防止定时任务与 /luckypeach backup now 并发写同一个备份文件 */
     private final AtomicBoolean backupRunning = new AtomicBoolean(false);
 
     public BackupManager(LuckyPeaches plugin) {
