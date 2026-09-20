@@ -153,7 +153,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
                 if (!PeachListener.isPlayerInDisabledWorld(targetId)) {
                     AttributeInstance maxHealthAttr = onlineTarget.getAttribute(Attribute.GENERIC_MAX_HEALTH);
                     if (maxHealthAttr != null) {
-                        HealthModifierUtil.applyPeachBonus(maxHealthAttr, finalNewBonus);
+                        HealthModifierUtil.applyPeachBonus(onlineTarget, maxHealthAttr, finalNewBonus);
                         double newHealth = maxHealthAttr.getValue();
                         if (currentHealth > newHealth) {
                             onlineTarget.setHealth(newHealth);

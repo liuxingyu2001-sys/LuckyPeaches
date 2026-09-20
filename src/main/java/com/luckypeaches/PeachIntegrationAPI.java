@@ -18,14 +18,61 @@ public class PeachIntegrationAPI {
     private static final Set<UUID> playersInBattle = ConcurrentHashMap.newKeySet();
 
     /**
-     * 临时关闭指定玩家的蟠桃血量加成
-     * 仅标记为战斗状态，不移除 modifier，不产生视觉变化
+     * 设置死亡扣罚豁免标记，不屏蔽血量加成。
      */
     public static void setPlayerInBattle(Player player) {
         if (player == null || !player.isOnline()) {
             return;
         }
         playersInBattle.add(player.getUniqueId());
+    }
+
+    // Main-thread mutations; async callers may query the flag safely.
+    private static final java.util.Map<UUID, Double> suppressedBonuses = new ConcurrentHashMap<>();
+
+    /**
+     * Temporarily suppress ONLY the peach health modifier. Call on the primary thread.
+     * Repeated calls are idempotent. Restoring also works during quit/shutdown,
+     * without waiting for database tasks. Persistent peach totals are never changed.
+     */
+    public static void setPeachBonusSuppressed(Player player, boolean suppressed) {
+        if (player == null) return;
+        if (!org.bukkit.Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("蟠桃血量屏蔽 API 必须在主线程调用");
+        }
+        UUID uuid = player.getUniqueId();
+        org.bukkit.attribute.AttributeInstance attr =
+            player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+        if (attr == null) throw new IllegalStateException("玩家缺少最大血量属性");
+        if (suppressed) {
+            suppressedBonuses.putIfAbsent(uuid, HealthModifierUtil.getPeachBonus(attr));
+            HealthModifierUtil.clearPeachBonus(attr);
+        } else {
+            Double bonus = suppressedBonuses.get(uuid);
+            if (bonus == null) return;
+            HealthModifierUtil.applyPeachBonus(attr, isWorldBlocked(player) ? 0 : bonus);
+            suppressedBonuses.remove(uuid);
+        }
+        double health = player.getHealth();
+        if (health > attr.getValue()) player.setHealth(attr.getValue());
+        LuckyPeaches plugin = LuckyPeaches.getInstance();
+        if (plugin != null) plugin.updateHealthScale(player);
+    }
+
+    public static boolean isPeachBonusSuppressed(UUID uuid) {
+        return uuid != null && suppressedBonuses.containsKey(uuid);
+    }
+
+    /** Every internal modifier write passes here, including delayed world/login/admin callbacks. */
+    static double effectivePeachBonus(Player player, double bonus) {
+        if (suppressedBonuses.replace(player.getUniqueId(), bonus) != null) return 0;
+        return bonus;
+    }
+
+    private static boolean isWorldBlocked(Player player) {
+        LuckyPeaches plugin = LuckyPeaches.getInstance();
+        return plugin != null && plugin.getConfig().getBoolean("world_integration.enabled", true)
+            && plugin.getConfig().getStringList("world_integration.disabled_worlds").contains(player.getWorld().getName());
     }
 
     /**
@@ -60,14 +107,14 @@ public class PeachIntegrationAPI {
 
             long delayTicks = plugin.getConfig().getLong("world_integration.peach_restore_delay_ticks", 0L);
             plugin.runSyncLater(() -> {
-                if (!player.isOnline()) return;
+                if (!player.isOnline() || isPlayerInBattle(playerId) || isWorldBlocked(player)) return;
                 org.bukkit.attribute.AttributeInstance attr =
                     player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
                 if (attr == null) return;
 
                 // 仅在值变化时更新，避免不必要的视觉波动
                 if (Math.abs(HealthModifierUtil.getPeachBonus(attr) - peachBonus) > 0.001) {
-                    HealthModifierUtil.applyPeachBonus(attr, peachBonus);
+                    HealthModifierUtil.applyPeachBonus(player, attr, peachBonus);
                     plugin.updateHealthScale(player);
                     player.setHealth(Math.min(player.getHealth(), attr.getValue()));
                 }
@@ -104,6 +151,7 @@ public class PeachIntegrationAPI {
      */
     public static void clearAllBattleStatus() {
         playersInBattle.clear();
+        suppressedBonuses.clear();
     }
 
     /**

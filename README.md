@@ -173,10 +173,12 @@ settings:
 供其他插件调用（调用时无视觉变化，不触发受伤/回血动画）：
 
 ```java
-// 战斗开始时标记（不移除 modifier，血条不变）
+// 2.2.8 起：主线程设置死亡豁免，并独立屏蔽蟠桃血量
 PeachIntegrationAPI.setPlayerInBattle(player);
+PeachIntegrationAPI.setPeachBonusSuppressed(player, true);
 
-// 战斗结束后恢复（从数据库同步 modifier，仅值变化时更新）
+// 结束/退出/关服：先同步恢复缓存加成，再解除死亡豁免并异步校准
+PeachIntegrationAPI.setPeachBonusSuppressed(player, false);
 PeachIntegrationAPI.setPlayerNotInBattle(player);
 
 // 检查是否战斗中（战斗中死亡不扣蟠桃血）

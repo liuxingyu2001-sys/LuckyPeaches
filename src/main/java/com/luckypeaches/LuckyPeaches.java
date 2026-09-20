@@ -335,6 +335,10 @@ public class LuckyPeaches extends JavaPlugin {
             configPollTask = null;
         }
 
+        for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {
+            try { PeachIntegrationAPI.setPeachBonusSuppressed(player, false); }
+            catch (RuntimeException error) { getLogger().warning("恢复蟠桃血量失败: " + player.getUniqueId() + " - " + error.getMessage()); }
+        }
         saveAllOnlinePlayers();
 
         if (backupManager != null) {
@@ -456,13 +460,14 @@ public class LuckyPeaches extends JavaPlugin {
             if (peachBonus == null) continue;
 
             double currentModifierValue = HealthModifierUtil.getPeachBonus(maxHealthAttr);
-            if (Math.abs(currentModifierValue - peachBonus) < 0.001) {
+            if (!PeachIntegrationAPI.isPeachBonusSuppressed(playerId)
+                    && Math.abs(currentModifierValue - peachBonus) < 0.001) {
                 updateHealthScale(player);
                 continue;
             }
 
             double healthBefore = player.getHealth();
-            HealthModifierUtil.applyPeachBonus(maxHealthAttr, peachBonus);
+            HealthModifierUtil.applyPeachBonus(player, maxHealthAttr, peachBonus);
             player.setHealth(Math.min(healthBefore, maxHealthAttr.getValue()));
             updateHealthScale(player);
         }

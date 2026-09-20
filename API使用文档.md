@@ -1,536 +1,67 @@
-# LuckyPeaches API 使用文档
+# LuckyPeaches API 使用说明
 
-## 📖 概述
+本文对应 **2.2.8**。服务端和编译依赖均需更新为 `Liu-LuckyPeaches-2.2.8.jar`；不要把 LuckyPeaches 打包进调用插件，使用 `provided` 或 `compileOnly`，并声明 `softdepend: [LuckyPeaches]`。
 
-LuckyPeaches 插件提供了一套完整的API接口，允许其他插件（如决斗插件、公会战插件等）临时控制玩家的蟠桃血量加成。
+API 类：`com.luckypeaches.PeachIntegrationAPI`。
 
-### 核心功能
-- **临时禁用蟠桃加成**：在战斗、决斗等场景下临时让蟠桃血量加成失效（**只打标记，不动物品属性，玩家血条不会有任何视觉变化**）
-- **自动同步恢复**：解除战斗标记时从数据库重新读取蟠桃加成并同步 modifier（仅在数值变化时更新，避免血条抖动）
-- **批量操作支持**：支持单个玩家和批量玩家的操作
+## 死亡豁免与血量屏蔽
 
-### API类
-```
-com.luckypeaches.PeachIntegrationAPI
-```
+这是两个独立功能，旧的战斗标记方法保持原语义：
 
----
+| 方法 | 行为 |
+|---|---|
+| `setPlayerInBattle(Player)` | 设置死亡不扣蟠桃加成的标记，**不移除血量加成**；null/离线忽略 |
+| `setPlayerNotInBattle(Player)` | 清除标记，异步读取数据库并校准蟠桃 modifier；null/离线忽略 |
+| `isPlayerInBattle(UUID)` | 查询死亡豁免标记 |
+| `setPeachBonusSuppressed(Player, true)` | **2.2.8 新增**，立即屏蔽蟠桃血量 modifier，保留待恢复数值 |
+| `setPeachBonusSuppressed(Player, false)` | **2.2.8 新增**，立即解除屏蔽并恢复缓存数值，无须等待数据库或调度任务 |
+| `isPeachBonusSuppressed(UUID)` | 查询血量屏蔽状态 |
 
-## 🔧 API方法说明
+`setPeachBonusSuppressed` 必须在 Bukkit **主线程**调用，错误线程抛出异常。null 忽略；重复启用不会把已移除后的 0 当成原加成，重复解除无副作用。它仅处理 LuckyPeaches 的蟠桃 modifier，不改变基础血量、装备/药水/其他插件 modifier，也不修改数据库中的永久蟠桃总量。
 
-### 1. 单个玩家控制
+屏蔽时当前血量超过新上限会被限制到上限，因此血条会变化；解除时不会强制满血。解除支持退出、关服回调中 `isOnline()` 已为 false 的有效 Player 对象；调用方应在 `saveData()` 和背包同步插件取快照前解除。
 
-#### `setPlayerInBattle(Player player)`
-标记玩家进入战斗状态。**不会移除 modifier，不会改变血条显示，不触发受伤/回血动画。**
+登录校验、吃桃、管理员改值、重载、离开屏蔽世界等内置加成更新都尊重屏蔽状态；收到的新加成先记入待恢复数值。离开屏蔽世界的延迟回调不会在屏蔽期间强制回血。解除时如果仍位于配置的禁用世界，仍保持该世界的禁用规则。
 
-**参数：**
-- `player` - 目标玩家对象（null 或离线会被忽略）
-
-**功能：**
-- 仅写入内部战斗标记
-- 被标记期间：死亡不扣除蟠桃血量、`setPlayerNotInBattle` 之外的操作不受影响
-
-**使用场景：** 玩家进入决斗/战斗时调用
-
----
-
-#### `setPlayerNotInBattle(Player player)`
-解除战斗标记并同步蟠桃加成。
-
-**参数：**
-- `player` - 目标玩家对象（null 或离线会被忽略）
-
-**功能：**
-- 清除战斗标记
-- 异步从数据库读取玩家的蟠桃加成值
-- 回到主线程后：仅当 modifier 数值与数据库不一致时才重新应用（先移除旧值再添加新值）
-- 数值变化时才更新血条缩放，并把当前血量限制在新上限内（**不会强制回满血**）
-- 受 `world_integration.peach_restore_delay_ticks` 控制延迟
-
-**使用场景：** 玩家退出决斗/战斗时调用
-
----
-
-### 2. 批量玩家控制
-
-#### `setPlayersInBattle(Collection<Player> players)`
-批量标记战斗状态。
-
-**参数：**
-- `players` - 玩家集合（List、Set等）
-
-**功能：**
-- 逐个调用 `setPlayerInBattle`
-- 自动过滤 null 和离线玩家
-
-**使用场景：** 团队决斗、公会战开始时调用
-
----
-
-#### `setPlayersNotInBattle(Collection<Player> players)`
-批量解除战斗标记并同步蟠桃加成。
-
-**参数：**
-- `players` - 玩家集合（List、Set等）
-
-**功能：**
-- 逐个调用 `setPlayerNotInBattle`
-- 自动过滤 null 和离线玩家
-
-**使用场景：** 团队决斗、公会战结束时调用
-
----
-
-### 3. 工具方法
-
-#### `isPlayerInBattle(UUID playerUuid)`
-检查玩家是否处于战斗状态。
-
-**返回值：**
-- `boolean` - 是否在战斗中（玩家离线/未标记为 false）
-
-**使用场景：** 判断是否需要跳过蟠桃相关逻辑
-
----
-
-#### `clearNonPeachModifiers(Player player)` / `clearNonPeachModifiers(Collection<Player> players)`
-清理玩家身上**所有非蟠桃**的 `GENERIC_MAX_HEALTH` modifier（等价于 `/lp clearhealth`）。
-
-**⚠️ 注意：** 会一并移除装备、药水等来源的血量 modifier，请谨慎使用。
-
----
-
-#### `getPluginInstance()`
-获取LuckyPeaches插件实例。
-
-**返回值：**
-- `LuckyPeaches` - 插件实例对象；**插件卸载后返回 null**，请判空
-
-**使用场景：** 需要访问插件内部功能时使用
-
----
-
-## 📦 依赖配置
-
-### Maven配置
-
-在您的插件 `pom.xml` 中添加以下依赖：
-
-```xml
-<dependencies>
-    <dependency>
-        <groupId>com.luckypeaches</groupId>
-        <artifactId>LuckyPeaches</artifactId>
-        <version>2.2.1</version>
-        <scope>provided</scope>
-    </dependency>
-</dependencies>
-```
-
-### Gradle配置
-
-```groovy
-dependencies {
-    compileOnly 'com.luckypeaches:LuckyPeaches:2.2.1'
-}
-```
-
----
-
-## 💡 使用示例
-
-### 示例1：1v1决斗系统
+## 决斗接入示例
 
 ```java
-package com.example.duel;
-
-import com.luckypeaches.PeachIntegrationAPI;
-import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitRunnable;
-
-public class DuelManager {
-    
-    private final DuelPlugin plugin;
-    
-    public DuelManager(DuelPlugin plugin) {
-        this.plugin = plugin;
-    }
-    
-    public void startDuel(Player player1, Player player2) {
-        // 关闭蟠桃血量加成
-        PeachIntegrationAPI.setPlayerInBattle(player1);
-        PeachIntegrationAPI.setPlayerInBattle(player2);
-        
-        player1.sendMessage("§a决斗开始！蟠桃加成已暂时禁用");
-        player2.sendMessage("§a决斗开始！蟠桃加成已暂时禁用");
-        
-        // 开始决斗逻辑...
-        startDuelLogic(player1, player2);
-    }
-    
-    public void endDuel(Player winner, Player loser) {
-        // 恢复蟠桃血量加成
-        PeachIntegrationAPI.setPlayerNotInBattle(winner);
-        PeachIntegrationAPI.setPlayerNotInBattle(loser);
-        
-        winner.sendMessage("§a决斗结束！蟠桃加成已恢复");
-        loser.sendMessage("§a决斗结束！蟠桃加成已恢复");
-        
-        // 结束决斗逻辑...
-    }
-    
-    private void startDuelLogic(Player p1, Player p2) {
-        new BukkitRunnable() {
-            int timeLeft = 300; // 5分钟
-            
-            @Override
-            public void run() {
-                if (timeLeft <= 0) {
-                    this.cancel();
-                    endDuel(null, null); // 平局
-                    return;
-                }
-                
-                if (!p1.isOnline() || !p2.isOnline()) {
-                    this.cancel();
-                    endDuel(null, null); // 玩家离线
-                    return;
-                }
-                
-                timeLeft--;
-            }
-        }.runTaskTimer(plugin, 0L, 20L);
-    }
+// 主线程；先持久化决斗恢复记录，再设置这些临时状态。
+PeachIntegrationAPI.setPlayerInBattle(player);
+PeachIntegrationAPI.setPeachBonusSuppressed(player, true);
+if (!PeachIntegrationAPI.isPlayerInBattle(player.getUniqueId())
+        || !PeachIntegrationAPI.isPeachBonusSuppressed(player.getUniqueId())) {
+    throw new IllegalStateException("蟠桃决斗限制未生效");
 }
+// 然后传送、发套件、设置本场自定义基础血量。
 ```
 
----
-
-### 示例2：团队决斗系统
+结束、取消、准备失败、退出或关服时，在主线程配对解除：
 
 ```java
-package com.example.teamduel;
-
-import com.luckypeaches.PeachIntegrationAPI;
-import org.bukkit.entity.Player;
-import java.util.List;
-
-public class TeamDuelManager {
-    
-    public void startTeamDuel(List<Player> teamA, List<Player> teamB) {
-        // 关闭所有玩家的蟠桃血量加成
-        PeachIntegrationAPI.setPlayersInBattle(teamA);
-        PeachIntegrationAPI.setPlayersInBattle(teamB);
-        
-        // 通知所有玩家
-        teamA.forEach(p -> p.sendMessage("§a团队决斗开始！蟠桃加成已暂时禁用"));
-        teamB.forEach(p -> p.sendMessage("§a团队决斗开始！蟠桃加成已暂时禁用"));
-        
-        // 开始决斗逻辑...
-    }
-    
-    public void endTeamDuel(List<Player> teamA, List<Player> teamB, String winningTeam) {
-        // 恢复所有玩家的蟠桃血量加成
-        PeachIntegrationAPI.setPlayersNotInBattle(teamA);
-        PeachIntegrationAPI.setPlayersNotInBattle(teamB);
-        
-        String message = "§a团队决斗结束！蟠桃加成已恢复";
-        if (winningTeam != null) {
-            message += " §e获胜队伍: " + winningTeam;
-        }
-        
-        teamA.forEach(p -> p.sendMessage(message));
-        teamB.forEach(p -> p.sendMessage(message));
-    }
+// 先恢复调用方自己管理的基础血量，再恢复蟠桃加成。
+PeachIntegrationAPI.setPeachBonusSuppressed(player, false); // 同步完成
+PeachIntegrationAPI.setPlayerNotInBattle(player);         // 在线时额外从数据库校准
+if (!player.isOnline()) {
+    PeachIntegrationAPI.clearBattleStatus(player.getUniqueId());
 }
+player.saveData();
 ```
 
----
+两个 API 独立配对；仅 `setPlayerNotInBattle` 不会解除显式血量屏蔽。旧版 LuckyPeaches 没有屏蔽 API，调用方应检查方法是否存在；需要公平血量的决斗应拒绝入场并提示升级，不能把仅设置死亡豁免当作血量屏蔽成功。
 
-### 示例3：公会战系统
+正常退出和 LuckyPeaches 停用也会尝试同步解除血量屏蔽。屏蔽缓存只在本服内存中，不参与共享配置；强杀进程后依靠重新登录时的数据库校验恢复蟠桃总量，不能替代调用方的持久化装备/基础血量恢复记录。
 
-```java
-package com.example.guildwar;
+## 其他接口
 
-import com.luckypeaches.PeachIntegrationAPI;
-import org.bukkit.entity.Player;
-import java.util.Map;
-import java.util.HashMap;
+- `setPlayersInBattle(Collection<Player>)` / `setPlayersNotInBattle(Collection<Player>)`：批量设置/解除死亡豁免；不是批量血量屏蔽，后者请在主线程逐个调用新 API。
+- `clearBattleStatus(UUID)`：只清除死亡标记，不加载数据库、不解除血量屏蔽。
+- `clearAllBattleStatus()`：插件卸载时清空运行时记录；必须先恢复玩家，不应作为正常比赛结束接口。
+- `getPluginInstance()`：返回 LuckyPeaches 实例，未加载或卸载后为 null。
+- `clearNonPeachModifiers(Player)` / 同名集合重载：清除**非蟠桃**最大血量 modifier，可能包含装备和药水。它不是屏蔽蟠桃的接口，不应用于本接入流程。
 
-public class GuildWarManager {
-    
-    private Map<String, List<Player>> warParticipants = new HashMap<>();
-    
-    public void startGuildWar(String guild1, String guild2, List<Player> players1, List<Player> players2) {
-        // 记录参与者
-        warParticipants.put(guild1, players1);
-        warParticipants.put(guild2, players2);
-        
-        // 关闭所有参与者的蟠桃血量加成
-        PeachIntegrationAPI.setPlayersInBattle(players1);
-        PeachIntegrationAPI.setPlayersInBattle(players2);
-        
-        // 广播消息
-        String message = "§6[公会战] §a公会战开始！所有参与者的蟠桃加成已暂时禁用";
-        players1.forEach(p -> p.sendMessage(message));
-        players2.forEach(p -> p.sendMessage(message));
-    }
-    
-    public void endGuildWar(String winningGuild) {
-        // 恢复所有参与者的蟠桃血量加成
-        warParticipants.values().forEach(PeachIntegrationAPI::setPlayersNotInBattle);
-        
-        String message = "§6[公会战] §a公会战结束！蟠桃加成已恢复";
-        if (winningGuild != null) {
-            message += " §e获胜公会: " + winningGuild;
-        }
-        
-        warParticipants.values().forEach(players -> 
-            players.forEach(p -> p.sendMessage(message))
-        );
-        
-        // 清空参与者
-        warParticipants.clear();
-    }
-    
-    public void playerJoinWar(Player player, String guild) {
-        // 玩家中途加入公会战
-        PeachIntegrationAPI.setPlayerInBattle(player);
-        player.sendMessage("§6[公会战] §a你已加入公会战！蟠桃加成已暂时禁用");
-    }
-    
-    public void playerLeaveWar(Player player) {
-        // 玩家中途离开公会战
-        PeachIntegrationAPI.setPlayerNotInBattle(player);
-        player.sendMessage("§6[公会战] §a你已离开公会战！蟠桃加成已恢复");
-    }
-}
-```
+## 线程和恢复边界
 
----
+死亡标记集合可并发访问；涉及 Player、属性或世界的调用应在主线程执行。数据库校准异步读取，应用前重新检查玩家在线状态、战斗标记与禁用世界，防止上一场的恢复任务干扰新决斗。数据库校准不强制回血。
 
-### 示例4：竞技场系统
-
-```java
-package com.example.arena;
-
-import com.luckypeaches.PeachIntegrationAPI;
-import org.bukkit.entity.Player;
-import java.util.HashSet;
-import java.util.Set;
-
-public class ArenaManager {
-    
-    private final Set<Player> activePlayers = new HashSet<>();
-    
-    public void enterArena(Player player) {
-        if (activePlayers.contains(player)) {
-            player.sendMessage("§c你已经在竞技场中了！");
-            return;
-        }
-        
-        // 关闭蟠桃血量加成
-        PeachIntegrationAPI.setPlayerInBattle(player);
-        activePlayers.add(player);
-        
-        player.sendMessage("§a进入竞技场！蟠桃加成已暂时禁用");
-    }
-    
-    public void exitArena(Player player) {
-        if (!activePlayers.contains(player)) {
-            player.sendMessage("§c你不在竞技场中！");
-            return;
-        }
-        
-        // 恢复蟠桃血量加成
-        PeachIntegrationAPI.setPlayerNotInBattle(player);
-        activePlayers.remove(player);
-        
-        player.sendMessage("§a退出竞技场！蟠桃加成已恢复");
-    }
-    
-    public void forceEndArena() {
-        // 强制结束竞技场（如服务器关闭等）
-        PeachIntegrationAPI.setPlayersNotInBattle(activePlayers);
-        activePlayers.forEach(p -> p.sendMessage("§c竞技场强制结束！蟠桃加成已恢复"));
-        activePlayers.clear();
-    }
-}
-```
-
----
-
-## ⚠️ 注意事项
-
-### 1. 线程安全
-- API内部已经处理了线程安全问题
-- 可以在任何线程调用API方法
-- 数据库操作在异步线程执行，modifier应用在主线程执行
-
-### 2. 空值处理
-- API会自动处理 `null` 值
-- API会自动过滤离线玩家
-- 无需额外检查
-
-### 3. 配对调用
-- **重要**：`setPlayerInBattle()` 和 `setPlayerNotInBattle()` 必须成对调用
-- 如果只调用 `setPlayerInBattle()` 而不调用 `setPlayerNotInBattle()`，玩家的蟠桃加成将永久失效
-- 建议在 `finally` 块中调用恢复方法
-
-### 4. 玩家离线处理
-```java
-try {
-    PeachIntegrationAPI.setPlayerInBattle(player);
-} finally {
-    // 确保即使玩家离线也能正确处理
-    if (player.isOnline()) {
-        PeachIntegrationAPI.setPlayerNotInBattle(player);
-    }
-}
-```
-
-### 5. 服务器关闭处理
-建议在插件禁用时恢复所有玩家的蟠桃加成：
-
-```java
-@Override
-public void onDisable() {
-    // 恢复所有活跃玩家的蟠桃加成
-    PeachIntegrationAPI.setPlayersNotInBattle(activePlayers);
-}
-```
-
-### 6. 自动恢复满血
-- **重要**：调用 `setPlayerNotInBattle()` 时，玩家的生命值会自动恢复到最大生命值上限
-- 这是默认行为，无需额外配置
-- 适用于所有恢复蟠桃加成的场景（单个玩家和批量玩家）
-- 确保玩家在战斗结束后以满血状态继续游戏
-
----
-
-## 🎯 最佳实践
-
-### 1. 使用状态管理
-```java
-public class DuelSession {
-    private Player player1;
-    private Player player2;
-    private boolean active;
-    
-    public void start() {
-        if (active) return;
-        
-        PeachIntegrationAPI.setPlayerInBattle(player1);
-        PeachIntegrationAPI.setPlayerInBattle(player2);
-        active = true;
-    }
-    
-    public void end() {
-        if (!active) return;
-        
-        PeachIntegrationAPI.setPlayerNotInBattle(player1);
-        PeachIntegrationAPI.setPlayerNotInBattle(player2);
-        active = false;
-    }
-}
-```
-
-### 2. 使用监听器处理异常情况
-```java
-@EventHandler
-public void onPlayerQuit(PlayerQuitEvent event) {
-    Player player = event.getPlayer();
-    
-    // 检查玩家是否在决斗中
-    if (duelManager.isInDuel(player)) {
-        // 自动结束决斗并恢复蟠桃加成
-        duelManager.endDuel(player);
-    }
-}
-
-@EventHandler
-public void onPlayerKick(PlayerKickEvent event) {
-    Player player = event.getPlayer();
-    
-    // 检查玩家是否在竞技场中
-    if (arenaManager.isInArena(player)) {
-        // 自动退出竞技场并恢复蟠桃加成
-        arenaManager.exitArena(player);
-    }
-}
-```
-
-### 3. 使用配置控制
-```java
-public class DuelConfig {
-    private boolean enablePeachIntegration;
-    
-    public DuelConfig(YamlConfiguration config) {
-        this.enablePeachIntegration = config.getBoolean("peach_integration.enabled", true);
-    }
-    
-    public void applyPeachIntegration(Player player) {
-        if (enablePeachIntegration) {
-            PeachIntegrationAPI.setPlayerInBattle(player);
-        }
-    }
-}
-```
-
----
-
-## 🔍 故障排查
-
-### 问题1：调用API后血量没有变化
-**可能原因：**
-- 玩家没有蟠桃加成
-- 玩家离线
-- 插件未正确加载
-
-**解决方案：**
-```java
-if (player.isOnline()) {
-    LuckyPeaches plugin = PeachIntegrationAPI.getPluginInstance();
-    if (plugin != null) {
-        PeachIntegrationAPI.setPlayerInBattle(player);
-    } else {
-        player.sendMessage("§c蟠桃插件未加载！");
-    }
-}
-```
-
-### 问题2：恢复后血量不正确
-**可能原因：**
-- 数据库中没有玩家的蟠桃加成数据
-- 玩家数据未正确保存
-
-**解决方案：**
-确保玩家数据正确保存，可以手动检查数据库。
-
-### 问题3：编译错误
-**可能原因：**
-- 依赖未正确添加
-- LuckyPeaches插件未安装到服务器
-
-**解决方案：**
-检查 `pom.xml` 或 `build.gradle` 中的依赖配置是否正确。
-
----
-
-## 📞 技术支持
-
-如有问题或建议，请联系LuckyPeaches插件开发者。
-
----
-
-## 📄 版本信息
-
-- **API版本**：2.2.1
-- **最后更新**：2026-09-12
-- **兼容Bukkit/Spigot版本**：1.13+
-
----
-
-## 📜 许可证
-
-本API文档遵循LuckyPeaches插件的许可证。
+新屏蔽 API 没有按调用插件区分所有权：同一玩家的生命周期应由一个管理者配对控制，多个插件不得各自解除同一个屏蔽标记。重载整个插件、不同步更新后端或外部插件直接改写蟠桃 modifier 不属于该保证范围。

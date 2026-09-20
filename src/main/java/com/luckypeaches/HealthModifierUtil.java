@@ -88,6 +88,11 @@ public final class HealthModifierUtil {
         apply(attr, PEACH_MODIFIER_UUID, PEACH_MODIFIER_NAME, bonus);
     }
 
+    /** Player-aware writes honour temporary API suppression and remember the latest bonus. */
+    public static void applyPeachBonus(org.bukkit.entity.Player player, AttributeInstance attr, double bonus) {
+        applyPeachBonus(attr, PeachIntegrationAPI.effectivePeachBonus(player, bonus));
+    }
+
     public static void clearPeachBonus(AttributeInstance attr) {
         remove(attr, PEACH_MODIFIER_UUID);
     }

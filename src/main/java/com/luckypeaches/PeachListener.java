@@ -185,9 +185,10 @@ public class PeachListener implements Listener {
                 if (!playersInDisabledWorld.contains(joiningPlayerId)) {
                     // 校验蟠桃 modifier 是否与数据库一致
                     double currentModifierValue = HealthModifierUtil.getPeachBonus(attr);
-                    if (Math.abs(currentModifierValue - peachBonus) >= 0.001) {
+                    if (PeachIntegrationAPI.isPeachBonusSuppressed(joiningPlayerId)
+                            || Math.abs(currentModifierValue - peachBonus) >= 0.001) {
                         double healthBefore = player.getHealth();
-                        HealthModifierUtil.applyPeachBonus(attr, peachBonus);
+                        HealthModifierUtil.applyPeachBonus(player, attr, peachBonus);
                         player.setHealth(Math.min(healthBefore, attr.getValue()));
 
                         if (plugin.isDebug()) {
@@ -210,6 +211,7 @@ public class PeachListener implements Listener {
         Player player = event.getPlayer();
         final UUID playerId = player.getUniqueId();
         final String playerName = player.getName();
+        PeachIntegrationAPI.setPeachBonusSuppressed(player, false);
         final double currentHealth = player.getHealth();
 
         playersInDisabledWorld.remove(playerId);
@@ -347,7 +349,7 @@ public class PeachListener implements Listener {
                         if (!playersInDisabledWorld.contains(playerId)) {
                             // 保存当前血量，防止移除 modifier 时被截断
                             double healthBefore = player.getHealth();
-                            HealthModifierUtil.applyPeachBonus(attr, newPeachBonus);
+                            HealthModifierUtil.applyPeachBonus(player, attr, newPeachBonus);
 
                             // 恢复血量到新上限以内
                             player.setHealth(Math.min(healthBefore + config.healthBonus, attr.getValue()));
@@ -545,7 +547,7 @@ public class PeachListener implements Listener {
                         if (attr != null) {
                             // 屏蔽世界中不套用加成，只更新数据库与提示
                             if (!playersInDisabledWorld.contains(playerId)) {
-                                HealthModifierUtil.applyPeachBonus(attr, newPeachBonus);
+                                HealthModifierUtil.applyPeachBonus(player, attr, newPeachBonus);
                                 plugin.updateHealthScale(player);
                                 player.setHealth(Math.min(player.getHealth(), attr.getValue()));
                             }
@@ -691,10 +693,11 @@ public class PeachListener implements Listener {
                 if (attr == null) {
                     return;
                 }
-                HealthModifierUtil.applyPeachBonus(attr, peachBonus);
+                HealthModifierUtil.applyPeachBonus(player, attr, peachBonus);
                 plugin.updateHealthScale(player);
 
-                if (plugin.getConfig().getBoolean("world_integration.restore_full_health_on_exit", true)) {
+                if (!PeachIntegrationAPI.isPeachBonusSuppressed(player.getUniqueId())
+                        && plugin.getConfig().getBoolean("world_integration.restore_full_health_on_exit", true)) {
                     player.setHealth(attr.getValue());
                 }
             }, delayTicks);
@@ -775,7 +778,8 @@ public class PeachListener implements Listener {
         HealthModifierUtil.clearWorldMaxBonus(attr);
         plugin.updateHealthScale(player);
 
-        if (plugin.getConfig().getBoolean("world_integration.restore_full_health_on_exit", true)) {
+        if (!PeachIntegrationAPI.isPeachBonusSuppressed(player.getUniqueId())
+                        && plugin.getConfig().getBoolean("world_integration.restore_full_health_on_exit", true)) {
             player.setHealth(attr.getValue());
         }
     }
