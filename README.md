@@ -6,7 +6,7 @@ Minecraft 幸运蟠桃插件 — 食用蟠桃可永久提升最大生命值，�
 
 - **生命值提升**：右键食用蟠桃道具，概率触发永久增加最大生命值
 - **多种蟠桃**：可配置多种蟠桃（不同材质、概率、加成数值、CustomModelData、CraftEngine 模型）
-- **可配置上限**：全局最大生命值上限 + VIP 权限分组上限
+- **可配置上限**：全局最大生命值上限 + VIP 权限分组上限 + 每种蟠桃独立食用血量上限
 - **登录血量归一**：登录时设置基础最大生命值（`base_max_health`，可配置）
 - **死亡惩罚**：死亡时按比例扣除蟠桃加成，支持权限分组、冷却时间、阈值保护
 - **世界隔离**：指定世界屏蔽蟠桃加成（进入即移除、离开即恢复）
@@ -99,7 +99,29 @@ config_poll_interval: 5                             # 配置变更检测间隔�
 - **`settings`** — 调试模式、`base_max_health`、数据库、最大生命值上限、VIP 分组、死亡惩罚、音效、粒子、血量缩放、自动备份
 - **`world_integration`** — 世界屏蔽（进入/离开行为、回满血设置）
 - **`world_max_health`** — 按世界的最大生命值
-- **`peaches`** — 蟠桃定义（`display_name`、`material`、`lore`、`health_bonus`、`chance`、`custom_model_data`、`craftengine_model`）
+- **`peaches`** — 蟠桃定义（`display_name`、`material`、`lore`、`health_bonus`、`max_consume_health`、`chance`、`custom_model_data`、`craftengine_model`）
+
+### 每种蟠桃的食用血量上限
+
+在已有蟠桃配置中添加 `max_consume_health`，每种蟠桃可设置不同数值：
+
+```yaml
+peaches:
+  peach_1:
+    # 保留该蟠桃的其它配置
+    max_consume_health: 100.0
+  peach_2:
+    max_consume_health: 200.0
+  peach_3:
+    max_consume_health: 0.0
+```
+
+- 按**基础最大生命值 + 蟠桃加成**判断，不看受伤后的当前血量，也不计世界和其它插件的生命值 modifier；2 点血量 = 1 颗心。
+- 设置为 `100` 时，超过 100 血不能吃，正好 100 血仍可吃；成功后正常增加该蟠桃的完整加成，因此这颗可能使血量超过 100。
+- 被限制时不消耗道具，也不进行成功概率判定。
+- `0` 或未配置表示没有该蟠桃的额外食用限制。全局和 VIP 上限仍然生效，VIP 权限不能绕过单种蟠桃的限制。
+- 修改后执行 `/lp reload`（或等待已启用的配置自动重载），已发放的蟠桃同样生效。
+- 拒绝食用提示可在 `messages.yml` 的 `peach_health_limit_reached` 中修改，支持 `%peach%`、`%limit%`、`%health%` 和 `%peach_health%`。
 
 ### 数据库
 

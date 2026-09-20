@@ -48,6 +48,11 @@ public class PeachManager {
 
             // 概率与加成做范围校验，避免配置写错导致永远吃不出 / 一次加满
             double healthBonus = Math.max(0.0, section.getDouble(key + ".health_bonus", 0.0));
+            double maxConsumeHealth = section.getDouble(key + ".max_consume_health", 0.0);
+            if (!Double.isFinite(maxConsumeHealth) || maxConsumeHealth < 0) {
+                plugin.getLogger().warning("蟠桃 '" + key + "' 的 max_consume_health 无效，已禁用独立食用上限");
+                maxConsumeHealth = 0.0;
+            }
             double chance = section.getDouble(key + ".chance", 1.0);
             if (chance < 0) {
                 chance = 0;
@@ -57,7 +62,7 @@ public class PeachManager {
             int cmd = section.getInt(key + ".custom_model_data", 0);
             String ceModel = section.getString(key + ".craftengine_model", "");
 
-            peaches.put(key, new PeachConfig(key, displayName, material, lore, healthBonus, chance, cmd, ceModel));
+            peaches.put(key, new PeachConfig(key, displayName, material, lore, healthBonus, chance, cmd, ceModel, maxConsumeHealth));
         }
         plugin.getLogger().info("已加载 " + peaches.size() + " 种蟠桃配置");
     }
@@ -131,17 +136,23 @@ public class PeachManager {
         public final String id, displayName, ceModel;
         public final Material material;
         public final List<String> lore;
-        public final double healthBonus, chance;
+        public final double healthBonus, chance, maxConsumeHealth;
         public final int customModelData;
 
         public PeachConfig(String id, String displayName, Material material, List<String> lore,
                           double healthBonus, double chance, int cmd, String ceModel) {
+            this(id, displayName, material, lore, healthBonus, chance, cmd, ceModel, 0.0);
+        }
+
+        public PeachConfig(String id, String displayName, Material material, List<String> lore,
+                          double healthBonus, double chance, int cmd, String ceModel, double maxConsumeHealth) {
             this.id = id;
             this.displayName = displayName;
             this.material = material;
             this.lore = lore;
             this.healthBonus = healthBonus;
             this.chance = chance;
+            this.maxConsumeHealth = maxConsumeHealth;
             this.customModelData = cmd;
             this.ceModel = ceModel != null ? ceModel : "";
         }

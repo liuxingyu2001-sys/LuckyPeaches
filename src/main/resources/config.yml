@@ -82,6 +82,10 @@ world_max_health:
   worlds:
     pvp: 500.0
 
+# 每种蟠桃可单独设置 max_consume_health（血量点数，2 点 = 1 颗心）
+# 基础最大生命值 + 蟠桃加成超过该值时禁止食用；等于时允许，不扣除被拒绝的道具
+# 不看受伤后的当前血量，不计世界/其它插件 modifier；全局与 VIP 上限仍生效
+# 0 或不设置 = 不额外限制；例如 peach_1 设为 100.0，即超过 100 血不能吃
 peaches:
   peach_1:
     display_name: "&6蟠桃"
@@ -90,6 +94,7 @@ peaches:
       - "&7一颗神奇的蟠桃"
       - "&e有 10% 概率增加 0.5 点生命上限"
     health_bonus: 0.5
+    max_consume_health: 0.0
     chance: 0.1
     custom_model_data: 0
   peach_2:
@@ -99,6 +104,7 @@ peaches:
       - "&7极其罕见的仙桃"
       - "&e有 50% 概率增加 1 点生命上限"
     health_bonus: 1.0
+    max_consume_health: 0.0
     chance: 0.5
     custom_model_data: 1
   peach_3:
@@ -108,6 +114,7 @@ peaches:
       - "&7一颗神奇的蟠桃"
       - "&e有 100% 概率增加 0.5 点生命上限"
     health_bonus: 0.5
+    max_consume_health: 0.0
     chance: 1.0
     custom_model_data: 2
   peach_4:
@@ -117,5 +124,6 @@ peaches:
       - "&7至尊蟠桃"
       - "&e有 100% 概率增加 1 点生命上限"
     health_bonus: 1.0
+    max_consume_health: 0.0
     chance: 1.0
     custom_model_data: 3

@@ -281,6 +281,15 @@ public class PeachListener implements Listener {
         double limit = getMaxHealthLimit(player);
         double currentPeachBonus = HealthModifierUtil.getPeachBonus(maxHealthAttr);
         double currentTotalHealth = maxHealthAttr.getBaseValue() + currentPeachBonus;
+        // 单种蟠桃的食用门槛：仅超过时禁止，受伤不会绕过，VIP 也不能豁免。
+        if (config.maxConsumeHealth > 0 && currentTotalHealth > config.maxConsumeHealth) {
+            player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("peach_health_limit_reached",
+                "%peach%", config.displayName,
+                "%limit%", String.format("%.1f", config.maxConsumeHealth),
+                "%health%", String.format("%.1f", currentTotalHealth),
+                PLACEHOLDER_PEACH_HEALTH, String.format("%.1f", currentPeachBonus)));
+            return;
+        }
         if (currentTotalHealth >= limit) {
             player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("max_health_reached",
                 PLACEHOLDER_PEACH_HEALTH, String.format("%.1f", currentPeachBonus)));
