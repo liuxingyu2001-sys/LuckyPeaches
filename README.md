@@ -101,6 +101,8 @@ config_poll_interval: 5                             # 配置变更检测间隔�
 - **`world_max_health`** — 按世界的最大生命值
 - **`peaches`** — 蟠桃定义（`display_name`、`material`、`lore`、`health_bonus`、`max_consume_health`、`chance`、`custom_model_data`、`craftengine_model`）
 
+设置 `craftengine_model` 时，新生成的蟠桃保留 CraftEngine 的模型数据，但名称和描述统一使用本插件的 `display_name` 和 `lore`；`lore: []` 会清除 CE 自带描述。`custom_model_data` 仅用于原版物品或 CE 不可用时的回退物品。
+
 ### 每种蟠桃的食用血量上限
 
 在已有蟠桃配置中添加 `max_consume_health`，每种蟠桃可设置不同数值：

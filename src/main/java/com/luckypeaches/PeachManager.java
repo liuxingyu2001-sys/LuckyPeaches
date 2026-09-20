@@ -99,11 +99,12 @@ public class PeachManager {
         // 写入 PDC 标识
         ItemMeta meta = item.getItemMeta();
         if (meta != null) {
-            // CE 渲染成功时不覆盖显示名/lore/CMD，避免破坏模型渲染
-            if (vanillaFallback) {
-                meta.setDisplayName(config.displayName);
-                meta.setLore(config.lore);
-                if (config.customModelData > 0) meta.setCustomModelData(config.customModelData);
+            // 名称和 lore 始终以本插件配置为准，包括 CE 物品；空 lore 也应清除 CE 描述。
+            meta.setDisplayName(config.displayName);
+            meta.setLore(config.lore);
+            // CE 物品保留自身模型数据，仅原版回退物品使用本插件的 CMD。
+            if (vanillaFallback && config.customModelData > 0) {
+                meta.setCustomModelData(config.customModelData);
             }
             meta.getPersistentDataContainer().set(peachKey, PersistentDataType.STRING, id);
             item.setItemMeta(meta);
