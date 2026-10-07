@@ -89,8 +89,8 @@ shared_config_dir: "/path/to/shared/LuckyPeaches"   # 留空 = 使用各服务�
 config_poll_interval: 5                             # 配置变更检测间隔（秒），0 = 禁用
 ```
 
-- 设置 `shared_config_dir` 后，`config.yml` 和 `messages.yml` 均从该目录读取，写入配置的命令（`/luckypeach world`、`/luckypeach backup enable` 等）也会保存到共享目录
-- `config_poll_interval` 秒数 > 0 时，插件定时检查共享文件修改时间，检测到变更自动热重载（配置、消息、蟠桃、在线玩家 modifier）
+- 所有服务器读取同一份 `config.yml`、`messages.yml` 和 `peaches.yml`，修改后自动同步重载。蟠桃列表单独放在 `peaches.yml`。
+- `config_poll_interval` 秒数 > 0 时，插件定时检查共享文件修改时间，检测到变更自动热重载（主配置、消息、蟠桃列表、在线玩家 modifier）
 - 各服务器本地 `plugins/LuckyPeaches/config.yml` 仅需设置 `shared_config_dir` 作为指向
 
 ### 后端 `config.yml`
@@ -99,13 +99,13 @@ config_poll_interval: 5                             # 配置变更检测间隔�
 - **`settings`** — 调试模式、`base_max_health`、数据库、最大生命值上限、VIP 分组、死亡惩罚、音效、粒子、血量缩放、自动备份
 - **`world_integration`** — 世界屏蔽（进入/离开行为、回满血设置）
 - **`world_max_health`** — 按世界的最大生命值
-- **`peaches`** — 蟠桃定义（`display_name`、`material`、`lore`、`health_bonus`、`max_consume_health`、`chance`、`custom_model_data`、`craftengine_model`）
+- **`peaches.yml`** — 蟠桃定义（`display_name`、`material`、`lore`、`health_bonus`、`max_consume_health`、`chance`、`custom_model_data`、`craftengine_model`）
 
 设置 `craftengine_model` 时，新生成的蟠桃保留 CraftEngine 的模型数据，但名称和描述统一使用本插件的 `display_name` 和 `lore`；`lore: []` 会清除 CE 自带描述。`custom_model_data` 仅用于原版物品或 CE 不可用时的回退物品。
 
 ### 每种蟠桃的食用血量上限
 
-在已有蟠桃配置中添加 `max_consume_health`，每种蟠桃可设置不同数值：
+蟠桃定义位于 `peaches.yml`：
 
 ```yaml
 peaches:

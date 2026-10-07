@@ -28,7 +28,7 @@ public class PeachManager {
 
     public void loadPeaches() {
         peaches.clear();
-        ConfigurationSection section = plugin.getConfig().getConfigurationSection("peaches");
+        ConfigurationSection section = plugin.getPeachConfig().getConfigurationSection("peaches");
         if (section == null) return;
 
         for (String key : section.getKeys(false)) {

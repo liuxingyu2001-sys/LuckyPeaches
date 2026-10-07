@@ -75,6 +75,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
     private void handleReload(CommandSender sender) {
         plugin.reloadConfig();
+        plugin.loadPeachConfig();
         plugin.mergeDefaultConfig();
         plugin.getMessageManager().reloadMessages();
         plugin.getPeachManager().loadPeaches();

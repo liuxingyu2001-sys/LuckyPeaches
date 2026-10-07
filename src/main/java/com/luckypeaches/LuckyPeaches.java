@@ -22,9 +22,9 @@ public class LuckyPeaches extends JavaPlugin {
     private long configPollInterval;
     private org.bukkit.scheduler.BukkitTask configPollTask;
     private final java.util.Map<String, Long> lastConfigMtimes = new java.util.HashMap<>();
-    private static final java.util.List<String> CONFIG_FILES = java.util.List.of("config.yml", "messages.yml");
-    /** 共享配置；volatile 保证异步线程（备份、指令）能看到主线程热重载后的新实例 */
+    private static final java.util.List<String> CONFIG_FILES = java.util.List.of("config.yml", "messages.yml", "peaches.yml");
     private volatile org.bukkit.configuration.file.FileConfiguration sharedConfig;
+    private org.bukkit.configuration.file.FileConfiguration peachConfig;
 
     @Override
     public void onEnable() {
@@ -48,6 +48,7 @@ public class LuckyPeaches extends JavaPlugin {
         configPollInterval = getConfig().getLong("config_poll_interval", 0);
 
         mergeDefaultConfig();
+        loadPeachConfig();
 
         org.bukkit.command.PluginCommand pluginCommand = getCommand("luckypeach");
         if (pluginCommand == null) {
@@ -136,6 +137,7 @@ public class LuckyPeaches extends JavaPlugin {
         }
         super.reloadConfig();
         sharedConfig = null;
+        peachConfig = null;
         refreshDebugFlag();
     }
 
@@ -150,6 +152,52 @@ public class LuckyPeaches extends JavaPlugin {
             return;
         }
         super.saveConfig();
+    }
+
+    public org.bukkit.configuration.file.FileConfiguration getPeachConfig() {
+        if (peachConfig == null) loadPeachConfig();
+        return peachConfig;
+    }
+
+    public void loadPeachConfig() {
+        java.io.File file = new java.io.File(getConfigDir(), "peaches.yml");
+        boolean fileExisted = file.exists();
+        org.bukkit.configuration.file.YamlConfiguration loaded =
+            org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(file);
+        try (java.io.InputStream in = getResource("peaches.yml")) {
+            if (in != null) {
+                try (java.io.InputStreamReader reader = new java.io.InputStreamReader(in)) {
+                    loaded.setDefaults(org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(reader));
+                }
+            }
+        } catch (java.io.IOException e) {
+            getLogger().warning("读取默认蟠桃配置失败: " + e.getMessage());
+        }
+
+        org.bukkit.configuration.ConfigurationSection legacy = getConfig().getConfigurationSection("peaches");
+        if (!fileExisted && legacy != null) {
+            loaded.set("peaches", legacy);
+            try {
+                loaded.save(file);
+                getConfig().set("peaches", null);
+                saveConfig();
+                getLogger().info("已将旧 config.yml 中的蟠桃配置迁移至 peaches.yml");
+            } catch (java.io.IOException e) {
+                getLogger().warning("迁移蟠桃配置失败: " + e.getMessage());
+            }
+        } else if (!fileExisted) {
+            ensureResourceInDir("peaches.yml", file);
+            loaded = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(file);
+        }
+        peachConfig = loaded;
+    }
+
+    public void savePeachConfig() {
+        try {
+            getPeachConfig().save(new java.io.File(getConfigDir(), "peaches.yml"));
+        } catch (java.io.IOException e) {
+            getLogger().severe("保存蟠桃配置失败: " + e.getMessage());
+        }
     }
 
     /**
@@ -248,6 +296,7 @@ public class LuckyPeaches extends JavaPlugin {
             if (mtime != lastConfigMtimes.getOrDefault(name, 0L)) {
                 getLogger().info("[ConfigSync] 检测到 " + name + " 变更，自动重载...");
                 reloadConfig();
+                loadPeachConfig();
                 mergeDefaultConfig();
                 messageManager.reloadMessages();
                 peachManager.loadPeaches();

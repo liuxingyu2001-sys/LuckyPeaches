@@ -1,0 +1,43 @@
+# 蟠桃定义，可配置多种不同物品
+# max_consume_health：基础最大生命值 + 蟠桃加成超过该值时禁止食用；0 = 不额外限制
+peaches:
+  peach_1:
+    display_name: "&6蟠桃"
+    material: APPLE
+    lore:
+      - "&7一颗神奇的蟠桃"
+      - "&e有 10% 概率增加 0.5 点生命上限"
+    health_bonus: 0.5
+    max_consume_health: 0.0
+    chance: 0.1
+    custom_model_data: 0
+  peach_2:
+    display_name: "&d优质蟠桃"
+    material: CHORUS_FRUIT
+    lore:
+      - "&7极其罕见的仙桃"
+      - "&e有 50% 概率增加 1 点生命上限"
+    health_bonus: 1.0
+    max_consume_health: 0.0
+    chance: 0.5
+    custom_model_data: 1
+  peach_3:
+    display_name: "&6极品蟠桃"
+    material: GOLDEN_APPLE
+    lore:
+      - "&7一颗神奇的蟠桃"
+      - "&e有 100% 概率增加 0.5 点生命上限"
+    health_bonus: 0.5
+    max_consume_health: 0.0
+    chance: 1.0
+    custom_model_data: 2
+  peach_4:
+    display_name: "&6至尊蟠桃"
+    material: GOLDEN_APPLE
+    lore:
+      - "&7至尊蟠桃"
+      - "&e有 100% 概率增加 1 点生命上限"
+    health_bonus: 1.0
+    max_consume_health: 0.0
+    chance: 1.0
+    custom_model_data: 3
