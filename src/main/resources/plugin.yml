@@ -9,6 +9,8 @@ libraries:
   - org.xerial:sqlite-jdbc:3.49.1.0
   - mysql:mysql-connector-java:8.0.33
   - com.zaxxer:HikariCP:5.1.0
+  # Redis 跨服血量同步（可选）；仅 redis.enabled=true 时需要
+  - redis.clients:jedis:5.1.5
 commands:
   luckypeach:
     aliases: [luckyp]

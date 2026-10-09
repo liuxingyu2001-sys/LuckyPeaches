@@ -13,7 +13,7 @@ Minecraft 幸运蟠桃插件 — 食用蟠桃可永久提升最大生命值，�
 - **世界最大生命值**：按世界设置基础最大生命值（跨世界自动切换）
 - **血量缩放**：防止血条刷屏，客户端最多显示可配置的心数
 - **双数据库**：SQLite（单机）/ MySQL（多服务器），支持游戏内热切换、自动迁移
-- **多端血量同步**：登录时从数据库校验蟠桃加成，切换服务器后血量自动恢复
+- **多端血量同步**：登录时从数据库校验蟠桃加成与当前血量；开启 Redis 后切服更快且无血量跳变
 - **共享配置目录**：群组服所有服务器读取同一份配置，修改后自动热重载
 - **强制清理**：`/luckypeach clearhealth` 清理玩家非蟠桃血量加成（单人或全部）
 - **自动备份**：SQLite 使用 VACUUM INTO，MySQL 导出 YML/JSON
@@ -65,6 +65,7 @@ mvn clean package
 |---------|------|------|
 | Spigot/Paper 1.13+ | ✅ | 运行环境（推荐 Paper 1.21） |
 | MySQL Connector + HikariCP | ❌ | MySQL 模式需要，服务器通过 `libraries` 自动下载 |
+| Jedis（Redis） | ❌ | 跨服血量同步需要，服务器通过 `libraries` 自动下载 |
 | PlaceholderAPI | ❌ | 占位符扩展（`softdepend`） |
 | CraftEngine | ❌ | 自定义物品模型 |
 
@@ -143,7 +144,35 @@ settings:
       max_connections: 10
 ```
 
-多端血量同步：使用 MySQL 时，玩家登录会从数据库校验蟠桃加成并自动修正 modifier，切换服务器后血量保持一致（`data.db` 不应放入共享目录，SQLite 不支持跨服务器并发）。
+多端血量同步：使用 MySQL 时，玩家登录会从数据库校验蟠桃加成与当前血量，切换服务器后血量保持一致（`data.db` 不应放入共享目录，SQLite 不支持跨服务器并发）。
+
+### 跨服血量同步（Redis，可选，推荐群组服开启）
+
+默认的数据库同步是异步的：玩家切服进入目标服时，先按目标服本地的旧血量显示，插件随后才异步查库修正 modifier / 血量，因此可能出现血条跳变、受伤动画，甚至高血量被夹回基础值。
+
+开启 Redis 后，源服在**退出 / 吃桃 / 死亡 / 设置加成**时把玩家最新状态（加成 + 当前血量）写入快照；目标服在登录预处理阶段（`AsyncPlayerPreLoginEvent`，异步线程）预取，并在 `PlayerJoinEvent` 主线程内**一次性同步还原**最大血量与当前血量，不再存在异步空窗：
+
+```yaml
+redis:
+  enabled: true
+  host: localhost
+  port: 6379
+  password: ""
+  database: 0
+  key_prefix: "luckypeaches:"    # 多套群组服共用一个 Redis 时用不同前缀隔离
+  timeout_ms: 1000
+  ttl_seconds: 600                # 快照 TTL，0 = 不过期；建议略大于一次切服耗时
+  max_total: 16
+  max_idle: 8
+  flush_interval_seconds: 60      # 周期兜底上报在线玩家血量，0 = 禁用
+```
+
+- Redis 只是加速层：**未开启或连接失败时自动回退数据库同步**，不影响任何既有功能。
+- **加成以数据库为准**：登录时先用快照即时还原血量，随后仍异步读库校准 `peach_bonus`；即使快照过期/丢失/被误删，也会被纠回数据库值，Redis 不会造成数据回退。
+- Redis 连续失败会自动熔断 30 秒后重试，期间不阻塞登录/吃桃等主线程操作。
+- 修改 `redis` 配置需重启服务器后生效（不随 `/luckypeach reload` 重连）。
+- 快照里存的是**真实持久化加成**，因此战斗中（`setPeachBonusSuppressed`）也不会被误写成 0。
+- 若仍看到明显掉血，通常是切服瞬间的真实伤害（如落地/窒息）；本插件已保证不会因为同步时序而额外改动血量。
 
 自动备份支持 SQLite（VACUUM INTO）和 MySQL（YML/JSON 导出）两种模式。
 
@@ -198,6 +227,7 @@ PeachIntegrationAPI.clearNonPeachModifiers(player);
 │   ├── LuckyPeaches.java             # 插件入口（共享配置目录 + 配置读写重定向 + 调度辅助）
 │   ├── PeachListener.java            # 核心逻辑（吃桃/死亡/世界切换/登录血量同步）
 │   ├── PeachManager.java             # 蟠桃物品创建（CraftEngine 集成）
+│   ├── RedisSyncManager.java         # 跨服血量快照（Redis，可选，登录同步还原）
 │   ├── DatabaseManager.java          # 双数据库（SQLite/MySQL）
 │   ├── PeachCommand.java             # /luckypeach 命令处理
 │   ├── BackupManager.java            # 自动备份
@@ -208,7 +238,8 @@ PeachIntegrationAPI.clearNonPeachModifiers(player);
 └── src/main/resources/
     ├── plugin.yml
     ├── config.yml
-    └── messages.yml
+    ├── messages.yml
+    └── peaches.yml
 ```
 
 ## 更新日志

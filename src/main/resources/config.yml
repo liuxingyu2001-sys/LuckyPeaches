@@ -4,6 +4,28 @@ shared_config_dir: ""
 # 配置文件变更检测间隔（秒），0 = 禁用自动重载
 config_poll_interval: 5
 
+# Redis 跨服血量同步（群组服切服无感，可选）
+# 开启后：退出/吃桃/死亡时把玩家最新血量写入 Redis，登录前预取并直接套用，
+# 避免切服时因“先按本地旧血量进入、再异步校准”造成的血量跳变/受伤动画。
+# Redis 不可用时自动回退到数据库同步；修改本节配置需重启服务器。
+redis:
+  enabled: false
+  host: localhost
+  port: 6379
+  password: ""
+  database: 0
+  # key 前缀，多套群组服共用同一个 Redis 时用不同前缀隔离
+  key_prefix: "luckypeaches:"
+  # 连接/读写超时（毫秒）
+  timeout_ms: 1000
+  # 快照 TTL（秒），0 = 不过期；建议略大于一次切服耗时
+  ttl_seconds: 600
+  # 连接池
+  max_total: 16
+  max_idle: 8
+  # 周期兜底上报在线玩家血量的间隔（秒），0 = 禁用
+  flush_interval_seconds: 60
+
 settings:
   # 调试模式
   debug: false

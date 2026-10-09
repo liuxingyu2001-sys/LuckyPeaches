@@ -70,6 +70,26 @@ public class PeachIntegrationAPI {
         return bonus;
     }
 
+    /**
+     * 持久化的蟠桃加成。
+     *
+     * <p>屏蔽期间 modifier 会被暂时移除（对外表现为 0），但真实值仍保存在内存里。
+     * 跨服快照 / 占位符等需要“真实加成”的场景必须走这里，
+     * 否则会把战斗中玩家的加成误写成 0。</p>
+     */
+    public static double persistentPeachBonus(Player player) {
+        if (player == null) {
+            return 0.0;
+        }
+        Double suppressed = suppressedBonuses.get(player.getUniqueId());
+        if (suppressed != null) {
+            return suppressed;
+        }
+        org.bukkit.attribute.AttributeInstance attr =
+            player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+        return attr == null ? 0.0 : HealthModifierUtil.getPeachBonus(attr);
+    }
+
     private static boolean isWorldBlocked(Player player) {
         LuckyPeaches plugin = LuckyPeaches.getInstance();
         return plugin != null && plugin.getConfig().getBoolean("world_integration.enabled", true)

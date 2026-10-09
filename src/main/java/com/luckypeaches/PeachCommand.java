@@ -145,8 +145,18 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
         // 先异步保存数据库，成功后再在主线程应用modifier
         plugin.runAsync(() -> {
-            plugin.getDatabaseManager().savePlayerData(targetId, targetName, finalNewBonus, currentHealth);
+            DatabaseManager db = plugin.getDatabaseManager();
+            boolean saved = db != null && db.savePlayerData(targetId, targetName, finalNewBonus, currentHealth);
             plugin.runSync(() -> {
+                if (!saved) {
+                    // 保存失败就不能改 modifier，否则内存与数据库不一致（重登后设置会“丢失”）
+                    sender.sendMessage(ChatColor.RED + "数据库保存失败，本次设置未生效，请稍后重试。");
+                    return;
+                }
+
+                // 已落库：打上本地变更标记，防止同时进行的登录校准用旧值覆盖
+                PeachListener.markBonusChanged(targetId);
+
                 Player onlineTarget = Bukkit.getPlayer(targetId);
                 if (onlineTarget == null || !onlineTarget.isOnline()) return;
 
@@ -161,6 +171,12 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
                         }
                     }
                     plugin.updateHealthScale(onlineTarget);
+                }
+
+                // 同步刷新跨服快照，避免设置完加成后切服读到旧值
+                RedisSyncManager redis = plugin.getRedisSyncManager();
+                if (redis != null && redis.isEnabled()) {
+                    redis.storePlayer(onlineTarget);
                 }
 
                 sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("set_health_success",

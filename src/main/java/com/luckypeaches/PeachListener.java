@@ -14,6 +14,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -41,6 +42,10 @@ public class PeachListener implements Listener {
     private static final Set<UUID> pendingDeathPenalty = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
     /** 右键被取消的诊断列表只打印一次 */
     private static final java.util.concurrent.atomic.AtomicBoolean interactDiagnosticLogged = new java.util.concurrent.atomic.AtomicBoolean(false);
+    /** 登录预处理阶段预取的 Redis 快照（异步线程写入，主线程 join 时读取） */
+    private static final java.util.Map<UUID, RedisSyncManager.Snapshot> pendingSnapshots = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 本服已生效的蟠桃加成变更时间戳；用于防止登录异步校准用旧值覆盖刚吃桃/扣罚的结果 */
+    private static final java.util.Map<UUID, Long> lastLocalBonusChange = new java.util.concurrent.ConcurrentHashMap<>();
 
     public PeachListener(LuckyPeaches plugin) {
         this.plugin = plugin;
@@ -59,6 +64,8 @@ public class PeachListener implements Listener {
         lastDeathTime.clear();
         eatingPlayers.clear();
         pendingDeathPenalty.clear();
+        pendingSnapshots.clear();
+        lastLocalBonusChange.clear();
     }
 
     // ========== 配置读取辅助 ==========
@@ -138,6 +145,45 @@ public class PeachListener implements Listener {
 
     // ========== 登录 / 退出 ==========
 
+    /**
+     * 登录预处理（异步线程）：从 Redis 预取跨服血量快照。
+     *
+     * <p>真正的 modifier / 血量套用在 {@link #onJoin(PlayerJoinEvent)} 主线程里同步完成，
+     * 这样就不会出现“先按本地旧血量进入、再异步校准”造成的血量跳变。</p>
+     */
+    @EventHandler
+    public void onPreLogin(AsyncPlayerPreLoginEvent event) {
+        RedisSyncManager redis = plugin.getRedisSyncManager();
+        if (redis == null || !redis.isEnabled()) {
+            return;
+        }
+        if (event.getLoginResult() != AsyncPlayerPreLoginEvent.Result.ALLOWED) {
+            pendingSnapshots.remove(event.getUniqueId());
+            return;
+        }
+        RedisSyncManager.Snapshot snapshot = redis.fetch(event.getUniqueId());
+        if (snapshot != null) {
+            pendingSnapshots.put(event.getUniqueId(), snapshot);
+        } else {
+            pendingSnapshots.remove(event.getUniqueId());
+        }
+    }
+
+    /**
+     * 记录一次本服已生效的蟠桃加成变更（吃桃 / 死亡惩罚 / 指令）。
+     * 登录后的异步数据库校准以此为护栏，避免用较早的读值覆盖新结果。
+     */
+    public static void markBonusChanged(UUID playerId) {
+        if (playerId != null) {
+            lastLocalBonusChange.put(playerId, System.currentTimeMillis());
+        }
+    }
+
+    private static boolean bonusChangedSince(UUID playerId, long sinceMs) {
+        Long changedAt = lastLocalBonusChange.get(playerId);
+        return changedAt != null && changedAt >= sinceMs;
+    }
+
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
@@ -152,6 +198,9 @@ public class PeachListener implements Listener {
 
         String worldName = player.getWorld().getName();
 
+        // 优先使用 Redis 快照：在登录主线程内一次性还原最大血量与当前血量，避免异步校准造成的跳变
+        RedisSyncManager.Snapshot snapshot = pendingSnapshots.remove(playerId);
+
         if (isWorldDisabled(worldName)) {
             // 屏蔽世界：移除蟠桃 modifier，但仍需应用世界最大生命值设置
             playersInDisabledWorld.add(playerId);
@@ -160,20 +209,43 @@ public class PeachListener implements Listener {
                 plugin.getLogger().info("玩家 " + player.getName() + " 在屏蔽世界中，移除蟠桃加成");
             }
             applyWorldMaxHealth(player, worldName);
+            if (snapshot != null && maxHealthAttr != null) {
+                setHealthQuietly(player, snapshot.currentHealth, maxHealthAttr.getValue());
+            }
             plugin.updateHealthScale(player);
             return;
         }
 
         playersInDisabledWorld.remove(playerId);
 
-        // 非屏蔽世界：异步从数据库校验蟠桃加成，确保多端切换后血量正确
+        // 快速路径：先用 Redis 快照把 max/current 血量一次性还原，消除异步空窗造成的血条跳变。
+        // 注意：快照只是加速层，peach_bonus 的权威值永远是数据库，下面仍会异步校准。
+        if (snapshot != null && maxHealthAttr != null) {
+            HealthModifierUtil.applyPeachBonus(player, maxHealthAttr, snapshot.peachBonus);
+            applyWorldMaxHealth(player, worldName);
+            setHealthQuietly(player, snapshot.currentHealth, maxHealthAttr.getValue());
+            plugin.updateHealthScale(player);
+            if (plugin.isDebug()) {
+                plugin.getLogger().info("玩家 " + player.getName() + " 使用 Redis 快照登录: bonus="
+                    + snapshot.peachBonus + " health=" + snapshot.currentHealth + "/" + maxHealthAttr.getValue());
+            }
+        }
+
+        // 权威校准：始终异步读取数据库。
+        // - 数据库才是持久化真相：即使 Redis 丢失/过期/被外部改库，这里也能把加成纠回正确值；
+        // - 没有快照时，current_health 也从数据库还原（旧版本缺的就是这一步）。
         final UUID joiningPlayerId = playerId;
+        final boolean appliedFromSnapshot = snapshot != null;
+        final long readStartedMs = System.currentTimeMillis();
         plugin.runAsync(() -> {
             DatabaseManager db = plugin.getDatabaseManager();
             if (db == null) {
                 return;
             }
-            double peachBonus = db.loadPlayerData(joiningPlayerId);
+            DatabaseManager.PlayerHealthData data = db.loadCompletePlayerData(joiningPlayerId);
+            final double dbBonus = data.getPeachBonus();
+            // 有快照时快照的 current_health 更接近退出瞬间，优先用快照；无快照才用数据库的
+            final double storedHealth = appliedFromSnapshot ? 0.0 : data.getCurrentHealth();
 
             plugin.runSync(() -> {
                 if (!player.isOnline()) return;
@@ -183,27 +255,62 @@ public class PeachListener implements Listener {
 
                 // 异步期间玩家可能已进入屏蔽世界，此时不能再套用蟠桃加成
                 if (!playersInDisabledWorld.contains(joiningPlayerId)) {
-                    // 校验蟠桃 modifier 是否与数据库一致
-                    double currentModifierValue = HealthModifierUtil.getPeachBonus(attr);
-                    if (PeachIntegrationAPI.isPeachBonusSuppressed(joiningPlayerId)
-                            || Math.abs(currentModifierValue - peachBonus) >= 0.001) {
-                        double healthBefore = player.getHealth();
-                        HealthModifierUtil.applyPeachBonus(player, attr, peachBonus);
-                        player.setHealth(Math.min(healthBefore, attr.getValue()));
+                    if (bonusChangedSince(joiningPlayerId, readStartedMs)) {
+                        // 读库期间本地已发生新变更（吃桃/扣罚/指令），以本地为准，只保证不超上限
+                        setHealthQuietly(player, player.getHealth(), attr.getValue());
+                    } else {
+                        // 校验蟠桃 modifier 是否与数据库一致；不一致时以数据库为准修正
+                        double currentModifierValue = HealthModifierUtil.getPeachBonus(attr);
+                        boolean corrected = false;
+                        if (PeachIntegrationAPI.isPeachBonusSuppressed(joiningPlayerId)
+                                || Math.abs(currentModifierValue - dbBonus) >= 0.001) {
+                            HealthModifierUtil.applyPeachBonus(player, attr, dbBonus);
+                            corrected = true;
+                            if (plugin.isDebug()) {
+                                plugin.getLogger().info("玩家 " + player.getName() + " 登录校准: modifier "
+                                    + currentModifierValue + " → " + dbBonus);
+                            }
+                        }
 
-                        if (plugin.isDebug()) {
-                            plugin.getLogger().info("玩家 " + player.getName() + " 登录校验: modifier "
-                                + currentModifierValue + " → " + peachBonus);
+                        if (storedHealth > 0 && Double.isFinite(storedHealth)) {
+                            // 无快照：用数据库保存的当前血量还原（不高于最终上限）
+                            setHealthQuietly(player, storedHealth, attr.getValue());
+                        } else {
+                            // 有快照：快照血量已套用；仅在上限变化后向下夹取
+                            setHealthQuietly(player, player.getHealth(), attr.getValue());
+                        }
+
+                        // 校正后同步刷新 Redis，使快照与数据库一致（失败不影响主流程）
+                        if (corrected) {
+                            RedisSyncManager redis = plugin.getRedisSyncManager();
+                            if (redis != null && redis.isEnabled()) {
+                                redis.storePlayer(player);
+                            }
                         }
                     }
                 }
 
                 // 使用当前实际所在世界，避免异步期间切换世界后套用旧世界设置
                 applyWorldMaxHealth(player, player.getWorld().getName());
-
                 plugin.updateHealthScale(player);
             });
         });
+    }
+
+    /**
+     * 仅在数值确实变化时设置血量，并把目标值夹在 [1, max] 之间。
+     *
+     * <p>{@code health <= 0}（无记录 / 死亡时落库）或非法时直接跳过，避免把玩家设成 1 血；
+     * 仅在数值确实变化时写入，避免不必要的客户端血条同步。</p>
+     */
+    private void setHealthQuietly(Player player, double health, double max) {
+        if (player.isDead() || !Double.isFinite(health) || health <= 0) {
+            return;
+        }
+        double target = Math.max(1.0, Math.min(health, max));
+        if (Math.abs(player.getHealth() - target) > 0.001) {
+            player.setHealth(target);
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -219,6 +326,20 @@ public class PeachListener implements Listener {
         eatingPlayers.remove(playerId);
         lastDeathTime.remove(playerId);
         PeachIntegrationAPI.clearBattleStatus(playerId);
+        pendingSnapshots.remove(playerId);
+        lastLocalBonusChange.remove(playerId);
+
+        // 跨服快照：先同步落 Redis（通常 < 1ms），确保切服时目标服登录能立刻读到最新血量；
+        // 数据库写入仍然异步，二者互不阻塞
+        AttributeInstance quitAttr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        final double quitBonus = PeachIntegrationAPI.persistentPeachBonus(player);
+        final double quitMax = quitAttr == null ? currentHealth : quitAttr.getValue();
+        final double quitHealth = currentHealth > 0 ? currentHealth : quitMax;
+        final String quitWorld = player.getWorld().getName();
+        RedisSyncManager redis = plugin.getRedisSyncManager();
+        if (redis != null && redis.isEnabled()) {
+            redis.store(playerId, playerName, quitBonus, quitHealth, quitMax, quitWorld);
+        }
 
         // 异步保存到数据库，延迟1秒执行以确保其他插件处理完成
         plugin.runAsyncLater(() -> {
@@ -232,7 +353,14 @@ public class PeachListener implements Listener {
             }
             // 只更新 current_health：绝不重写 peach_bonus，
             // 否则数据库卡顿时这次"读旧值再写回"会把并发的吃桃/死亡惩罚结果覆盖掉
-            db.updateCurrentHealth(playerId, currentHealth);
+            boolean updated = db.updateCurrentHealth(playerId, currentHealth);
+            // 数据库写成功后再补一次 Redis：退出瞬间的 Redis 写失败也能收敛，避免快照长期陈旧
+            if (updated) {
+                RedisSyncManager r = plugin.getRedisSyncManager();
+                if (r != null && r.isEnabled()) {
+                    r.store(playerId, playerName, quitBonus, quitHealth, quitMax, quitWorld);
+                }
+            }
         }, 20L); // 延迟1秒（20 ticks）
     }
 
@@ -334,6 +462,9 @@ public class PeachListener implements Listener {
                     return;
                 }
 
+                // 加成已落库：打上本地变更标记，防止同时进行的登录校准用旧值覆盖
+                markBonusChanged(playerId);
+
                 final double newPeachBonus = updated;
 
                 // 在主线程中应用peach_bonus
@@ -356,6 +487,12 @@ public class PeachListener implements Listener {
 
                             // 更新缩放
                             plugin.updateHealthScale(player);
+                        }
+
+                        // 跨服快照：吃桃后立刻刷新，防止“刚吃完就切服”读到旧值
+                        RedisSyncManager redis = plugin.getRedisSyncManager();
+                        if (redis != null && redis.isEnabled()) {
+                            redis.storePlayer(player);
                         }
 
                         // 粒子效果
@@ -539,6 +676,9 @@ public class PeachListener implements Listener {
                     return;
                 }
 
+                // 扣罚已落库：打上本地变更标记，防止同时进行的登录校准用旧值覆盖
+                markBonusChanged(playerId);
+
                 long restoreDelay = plugin.getConfig().getLong("settings.death_penalty.restore_delay_ticks", 2L);
                 plugin.runSyncLater(() -> {
                     try {
@@ -554,6 +694,12 @@ public class PeachListener implements Listener {
                             // 只更新血量列：加成上一步已经写过绝对值，
                             // 这里再写一次会在并发吃桃时把新加成覆盖回去
                             db.updateCurrentHealth(playerId, player.getHealth());
+
+                            // 跨服快照：死亡惩罚后刷新，避免玩家立刻切服后血量回流
+                            RedisSyncManager redis = plugin.getRedisSyncManager();
+                            if (redis != null && redis.isEnabled()) {
+                                redis.storePlayer(player);
+                            }
 
                             String penaltyMsg = plugin.getMessageManager().getPrefixedMessage("death_penalty");
                             player.sendMessage(formatDeathPenaltyMessage(penaltyMsg, penalty, newPeachBonus));

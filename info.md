@@ -4,7 +4,7 @@
 
 Single Spigot/Paper backend plugin (Java 17, Maven). Eating peach items permanently boosts max health via `AttributeModifier`. Features: multi-world isolation, death penalty, SQLite/MySQL dual-database, PlaceholderAPI, CraftEngine custom models, health scaling, shared config directory for network servers.
 
-The former `LuckyPeaches-Proxy` (Velocity config sync via MySQL) was removed — replaced by a **shared config directory** (`shared_config_dir`) pattern copied from mcskills: all servers read the same `config.yml` / `messages.yml`, mtime polling auto-reloads on change.
+The former `LuckyPeaches-Proxy` (Velocity config sync via MySQL) was removed — replaced by a **shared config directory** (`shared_config_dir`) pattern copied from mcskills: all servers read the same `config.yml` / `messages.yml` / `peaches.yml`, mtime polling auto-reloads on change. Cross-server player health is synced through MySQL (async, fallback) and optionally through a Redis snapshot for seamless server switching.
 
 ## Build
 
@@ -32,6 +32,7 @@ cp target/Liu-LuckyPeaches-*.jar /home/p/          # production
 | `LuckyPeaches.java` | Entrypoint. **Overrides `getConfig()`/`reloadConfig()`/`saveConfig()`** to redirect to shared dir when `shared_config_dir` is set. `startConfigPollTask()` polls file mtimes. Also hosts `runAsync/runSync/runAsyncLater/runSyncLater` scheduler helpers. |
 | `PeachListener.java` | Core logic — join/quit/interact/death/world-change handlers. `clearRuntimeState()` wipes the static per-player collections on disable. `refreshWorldStateForOnlinePlayers()` re-evaluates disabled-world / world-max state after a config reload. |
 | `PeachManager.java` | Peach item creation, CraftEngine integration with vanilla fallback. Clamps `chance` to `[0,1]`, `health_bonus >= 0`, giveaway amount ≤ `MAX_GIVE_AMOUNT`. |
+| `RedisSyncManager.java` | Optional cross-server health snapshot over Redis (Jedis). Written on quit/eat/death/sethealth + periodic flush; fetched in `AsyncPlayerPreLoginEvent`, applied synchronously in `PlayerJoinEvent`. Self-disables and falls back to DB when disabled/unreachable. |
 | `DatabaseManager.java` | Dual SQLite/MySQL. `executeQuery(DBAction)` callback pattern handles connection lifecycle. `initialize()` returns `false` when the DB is unusable. `isMysql()` is the single type accessor. |
 | `PeachCommand.java` | All `/luckypeach` subcommands including `/luckypeach db` hot-switch and `/luckypeach clearhealth`. |
 | `BackupManager.java` | Auto-backup. SQLite: VACUUM INTO. MySQL: YML/JSON export. Re-entrancy guarded by an `AtomicBoolean`; interval clamped to ≥ 1h. |
@@ -43,8 +44,9 @@ cp target/Liu-LuckyPeaches-*.jar /home/p/          # production
 ## Resources
 
 - `plugin.yml` — resource filtering on (`${project.version}` substituted). `api-version: 1.13`. MySQL/HikariCP via `libraries` (auto-downloaded by server, NOT bundled in jar).
-- `config.yml` — `shared_config_dir` at root + everything else under `settings:`.
+- `config.yml` — `shared_config_dir` at root + everything else under `settings:`; optional `redis:` block for cross-server health sync.
 - `messages.yml` — all user-facing strings. `&` color codes.
+- `peaches.yml` — peach definitions (split out of `config.yml`); legacy `config.yml:peaches` is auto-migrated on first load.
 
 ## Key patterns & gotchas
 
@@ -76,7 +78,8 @@ The `executeQuery(DBAction<T>)` callback pattern handles this: MySQL connections
 - `eatingPlayers` Set prevents duplicate eat attempts during async processing. Always clean up in `finally` or `catch`.
 - **Never call Bukkit API from async threads** (e.g., `player.getHealth()` in async context is unsafe).
 - **Never do blocking DB calls on main thread** — `PeachPlaceholder` reads from AttributeModifier, not DB.
-- `onJoin` modifier verification: DB read on async thread, modifier apply back on main thread.
+- `onJoin` modifier verification: DB read on async thread, modifier apply back on main thread. When Redis is enabled, `onPreLogin` (async) fetches the snapshot and `onJoin` applies it synchronously on the main thread, then returns (no async DB round trip); without a snapshot it falls back to `loadCompletePlayerData` (bonus **and** `current_health`) applied on the main thread.
+- `RedisSyncManager.storePlayer` / `peach_bonus` snapshotting must run on the main thread (reads attributes). Quit writes are synchronous on purpose (sub-ms) so the next server can read the fresh value.
 - Use the `plugin.runAsync/runSync/runAsyncLater/runSyncLater` helpers instead of touching the scheduler
   directly: they skip scheduling while the plugin is disabled (avoids `IllegalStateException` during shutdown)
   and keep every call site consistent.
@@ -99,9 +102,10 @@ nulls the static `instance`. **Any new static collection must be cleared there t
   window is limited to a delayed quit-save (~1s) overlapping a fast re-login on another server. Making it
   atomic needs dialect-specific UPSERT SQL that cannot be tested in this environment, so it is left as-is
   (the failure mode of shipping wrong SQL — every eat failing — is worse than the rare lost increment).
-- `current_health` is effectively a vestigial column: nothing reads it for gameplay (the 3-arg
-  `savePlayerData` only carries it forward). Death-penalty saves can therefore write `0` there.
-  It is still maintained through `updateCurrentHealth()`, which never rewrites `peach_bonus`.
+- `current_health` is the cross-server source of truth for current health and IS read on join now: with Redis
+  via the `health` snapshot field, without Redis via `loadCompletePlayerData(...).getCurrentHealth()` in the
+  main-thread completion of the join handler. It is still maintained through `updateCurrentHealth()` (never
+  rewrites `peach_bonus`). `RedisSyncManager` guards against storing `0` (dead players store their max instead).
 - The death-penalty cooldown IS persisted now (`<prefix>peach_death_cooldown` table, written by
   `saveDeathPenalty`, read by `getLastPenaltyMs`) so a "fake death" (client stuck in the death state)
   followed by a server switch cannot be charged twice inside one cooldown window. The in-memory
@@ -114,6 +118,25 @@ nulls the static `instance`. **Any new static collection must be cleared there t
   off the tick thread.
 - Delayed tasks (quit-save, world-exit restore) are cancelled by Bukkit when the plugin disables. Bonuses are
   unaffected (they live in the DB); `saveAllOnlinePlayers()` covers online players at shutdown.
+
+### Cross-server health sync (optional Redis)
+
+`RedisSyncManager` is a **cache, never the source of truth**. The database remains authoritative for
+`peach_bonus`; Redis only carries a fresh snapshot so the health bar can be restored synchronously in
+`PlayerJoinEvent`.
+
+- `onJoin` applies the snapshot (if any) for an instant visual, then **always** runs an async
+  `loadCompletePlayerData` reconciliation. A stale/lost/expired snapshot is corrected back to the DB value
+  and the corrected value is re-published to Redis.
+- `PeachListener.markBonusChanged(uuid)` is set after every locally-persisted bonus change (eat / death
+  penalty / `sethealth`). The join reconciliation skips its correction if a local change happened after it
+  started reading, so a stale DB read can never overwrite a just-eaten bonus.
+- Any Redis failure is swallowed and logged; after 3 consecutive failures the manager suspends itself for
+  30 s and all callers fall back to the DB path (no main-thread blocking, no data loss).
+- Quit writes Redis synchronously (sub-ms) and re-publishes after the delayed DB save succeeds, so the
+  snapshot converges with the DB even if the first write failed.
+- Ownership changed: `current_health` is no longer vestigial — it is read on join when no snapshot exists.
+  Guard: values `<= 0` (missing row / death-time write) are ignored, so new players are not clamped to 1 HP.
 
 ### Config merge gotcha
 
@@ -166,6 +189,7 @@ verbatim with a console warning.
 | CraftEngine | Optional | provided | Maven repo `repo.momirealms.net`. Both `craft-engine-bukkit` + `craft-engine-core`. |
 | MySQL Connector 8.0.33 | Optional | provided | Via `libraries` auto-download |
 | HikariCP 5.1.0 | Optional | provided | Same as above |
+| Jedis 5.1.5 | Optional | provided | Redis cross-server health sync. Via `libraries` auto-download. |
 
 All deps are `provided` scope — the server supplies them at runtime via `libraries` in plugin.yml.
 

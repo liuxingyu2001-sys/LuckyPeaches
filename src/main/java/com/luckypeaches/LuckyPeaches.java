@@ -14,6 +14,8 @@ public class LuckyPeaches extends JavaPlugin {
     private MessageManager messageManager;
     private PeachListener peachListener;
     private PeachPlaceholder placeholder;
+    /** 跨服血量快照（Redis）；未启用/连接失败时自禁用 */
+    private RedisSyncManager redisSyncManager;
     private boolean pluginInitialized = false;
     private boolean debug = false;
 
@@ -354,6 +356,9 @@ public class LuckyPeaches extends JavaPlugin {
         this.backupManager = new BackupManager(this);
         this.backupManager.initialize();
 
+        this.redisSyncManager = new RedisSyncManager(this);
+        this.redisSyncManager.initialize();
+
         this.peachManager = new PeachManager(this);
         this.peachManager.loadPeaches();
 
@@ -390,6 +395,9 @@ public class LuckyPeaches extends JavaPlugin {
         }
         saveAllOnlinePlayers();
 
+        if (redisSyncManager != null) {
+            redisSyncManager.close();
+        }
         if (backupManager != null) {
             backupManager.shutdown();
         }
@@ -412,6 +420,7 @@ public class LuckyPeaches extends JavaPlugin {
 
         databaseManager = null;
         backupManager = null;
+        redisSyncManager = null;
         messageManager = null;
         peachManager = null;
         peachListener = null;
@@ -449,6 +458,12 @@ public class LuckyPeaches extends JavaPlugin {
                 // 只更新血量列：蟠桃加成在发生变化时（吃桃/死亡惩罚/sethealth）就已入库，
                 // 这里再"读出来写回去"只会在数据库卡顿时把并发写入覆盖成旧值
                 databaseManager.updateCurrentHealth(playerId, currentHealth);
+
+                // 关服时也刷新一次跨服快照，便于代理把玩家迁到别的服时血量无缝
+                RedisSyncManager redis = redisSyncManager;
+                if (redis != null && redis.isEnabled()) {
+                    redis.storePlayer(player);
+                }
             } catch (Exception e) {
                 getLogger().severe("保存玩家 " + player.getName() + " 数据失败: " + e.getMessage());
             }
@@ -473,6 +488,10 @@ public class LuckyPeaches extends JavaPlugin {
 
     public PeachListener getPeachListener() {
         return peachListener;
+    }
+
+    public RedisSyncManager getRedisSyncManager() {
+        return redisSyncManager;
     }
 
     public boolean isDebug() {
