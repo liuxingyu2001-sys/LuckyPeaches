@@ -13,6 +13,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
@@ -46,6 +47,14 @@ public class PeachListener implements Listener {
     private static final java.util.Map<UUID, RedisSyncManager.Snapshot> pendingSnapshots = new java.util.concurrent.ConcurrentHashMap<>();
     /** 本服已生效的蟠桃加成变更时间戳；用于防止登录异步校准用旧值覆盖刚吃桃/扣罚的结果 */
     private static final java.util.Map<UUID, Long> lastLocalBonusChange = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 登录时被当前上限夹低、待其它插件最大生命加成就位后补回的血量（UUID -> 记录值） */
+    private static final java.util.Map<UUID, Double> pendingJoinHealthRestore = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 进入屏蔽世界前的血量，离开时用于还原非蟠桃血量（UUID -> 记录值） */
+    private static final java.util.Map<UUID, Double> preDisabledWorldHealth = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 待补回期间玩家受到真实伤害的标记：有伤害就不再补回，避免把伤害治掉 */
+    private static final Set<UUID> healthModifiedExternally = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 原版基础最大生命值：默认只接管这个值，避免覆盖其它插件设置的 base */
+    private static final double VANILLA_BASE_MAX_HEALTH = 20.0;
 
     public PeachListener(LuckyPeaches plugin) {
         this.plugin = plugin;
@@ -66,6 +75,9 @@ public class PeachListener implements Listener {
         pendingDeathPenalty.clear();
         pendingSnapshots.clear();
         lastLocalBonusChange.clear();
+        pendingJoinHealthRestore.clear();
+        preDisabledWorldHealth.clear();
+        healthModifiedExternally.clear();
     }
 
     // ========== 配置读取辅助 ==========
@@ -189,11 +201,18 @@ public class PeachListener implements Listener {
         Player player = event.getPlayer();
         UUID playerId = player.getUniqueId();
 
-        // 设置基础生命值
+        // 设置基础生命值。
+        // 默认只接管“仍为原版默认值(20)”的情况，避免覆盖其它插件通过 setBaseValue 设置的基础生命；
+        // 需要无条件接管时把 settings.force_base_max_health 设为 true。
         double baseMaxHealth = plugin.getConfig().getDouble("settings.base_max_health", 20.0);
         AttributeInstance maxHealthAttr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
-        if (baseMaxHealth > 0 && maxHealthAttr != null && maxHealthAttr.getBaseValue() != baseMaxHealth) {
-            maxHealthAttr.setBaseValue(baseMaxHealth);
+        if (baseMaxHealth > 0 && maxHealthAttr != null) {
+            double currentBase = maxHealthAttr.getBaseValue();
+            boolean vanillaDefault = Math.abs(currentBase - VANILLA_BASE_MAX_HEALTH) < 0.001;
+            boolean force = plugin.getConfig().getBoolean("settings.force_base_max_health", false);
+            if ((vanillaDefault || force) && Math.abs(currentBase - baseMaxHealth) >= 0.001) {
+                maxHealthAttr.setBaseValue(baseMaxHealth);
+            }
         }
 
         String worldName = player.getWorld().getName();
@@ -209,7 +228,9 @@ public class PeachListener implements Listener {
                 plugin.getLogger().info("玩家 " + player.getName() + " 在屏蔽世界中，移除蟠桃加成");
             }
             applyWorldMaxHealth(player, worldName);
-            if (snapshot != null && maxHealthAttr != null) {
+            if (!plugin.isHealthDelegatedToSparrow() && snapshot != null && maxHealthAttr != null) {
+                // 屏蔽世界内先按降低后的上限还原，并记录源血量供离开时还原非蟠桃部分
+                preDisabledWorldHealth.put(playerId, snapshot.currentHealth);
                 setHealthQuietly(player, snapshot.currentHealth, maxHealthAttr.getValue());
             }
             plugin.updateHealthScale(player);
@@ -223,7 +244,7 @@ public class PeachListener implements Listener {
         if (snapshot != null && maxHealthAttr != null) {
             HealthModifierUtil.applyPeachBonus(player, maxHealthAttr, snapshot.peachBonus);
             applyWorldMaxHealth(player, worldName);
-            setHealthQuietly(player, snapshot.currentHealth, maxHealthAttr.getValue());
+            restoreHealthWithPending(player, playerId, snapshot.currentHealth);
             plugin.updateHealthScale(player);
             if (plugin.isDebug()) {
                 plugin.getLogger().info("玩家 " + player.getName() + " 使用 Redis 快照登录: bonus="
@@ -272,12 +293,17 @@ public class PeachListener implements Listener {
                             }
                         }
 
-                        if (storedHealth > 0 && Double.isFinite(storedHealth)) {
-                            // 无快照：用数据库保存的当前血量还原（不高于最终上限）
-                            setHealthQuietly(player, storedHealth, attr.getValue());
-                        } else {
-                            // 有快照：快照血量已套用；仅在上限变化后向下夹取
-                            setHealthQuietly(player, player.getHealth(), attr.getValue());
+                        // 当前血量：已委托 SparrowSync 时不自行还原，避免用本插件可能滞后的
+                        // current_health 覆盖 SparrowSync 已正确恢复的血量；本插件只校准蟠桃 modifier。
+                        if (!plugin.isHealthDelegatedToSparrow()) {
+                            if (storedHealth > 0 && Double.isFinite(storedHealth)) {
+                                // 无快照：用数据库保存的当前血量还原（不高于最终上限），
+                                // 被上限夹低时登记，待其它插件的最大生命加成就位后补回
+                                restoreHealthWithPending(player, joiningPlayerId, storedHealth);
+                            } else {
+                                // 有快照：快照血量已套用；仅在上限变化后向下夹取
+                                setHealthQuietly(player, player.getHealth(), attr.getValue());
+                            }
                         }
 
                         // 校正后同步刷新 Redis，使快照与数据库一致（失败不影响主流程）
@@ -313,12 +339,80 @@ public class PeachListener implements Listener {
         }
     }
 
+    /**
+     * 还原当前血量，并在“被当前上限夹低”时登记一次延迟补回。
+     *
+     * <p>登录瞬间其它插件的最大生命加成往往还没应用，{@code attr.getValue()} 偏低，
+     * 直接夹取会把非蟠桃血量永久压低。这里先按当前上限尽量还原，同时登记延迟任务：
+     * 待其它插件把上限抬起来后，再补回到记录值（且不高于当时的真实上限）。</p>
+     */
+    private void restoreHealthWithPending(Player player, UUID playerId, double recordedHealth) {
+        if (!Double.isFinite(recordedHealth) || recordedHealth <= 0) {
+            return;
+        }
+        AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        if (attr == null) {
+            return;
+        }
+        double max = attr.getValue();
+        setHealthQuietly(player, recordedHealth, max);
+        if (recordedHealth > max + 0.001) {
+            pendingJoinHealthRestore.put(playerId, recordedHealth);
+            long delay = Math.max(1L, plugin.getConfig().getLong("settings.join_health_restore_delay_ticks", 40L));
+            plugin.runSyncLater(() -> reconcileRestoredHealth(player, playerId), delay);
+        }
+    }
+
+    /**
+     * 延迟补回登录时被夹低的血量。若玩家期间受到真实伤害则放弃补回，避免把伤害治掉。
+     */
+    private void reconcileRestoredHealth(Player player, UUID playerId) {
+        Double recorded = pendingJoinHealthRestore.remove(playerId);
+        if (recorded == null) {
+            return;
+        }
+        if (!player.isOnline() || player.isDead()) {
+            healthModifiedExternally.remove(playerId);
+            return;
+        }
+        if (healthModifiedExternally.remove(playerId)) {
+            return; // 已有真实伤害，保持现状
+        }
+        AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        if (attr == null) {
+            return;
+        }
+        double target = Math.min(recorded, attr.getValue());
+        double before = player.getHealth();
+        if (target > before + 0.001) {
+            player.setHealth(target);
+            plugin.updateHealthScale(player);
+            if (plugin.isDebug()) {
+                plugin.getLogger().info("玩家 " + player.getName() + " 登录血量补回: " + before + " → " + target);
+            }
+        }
+    }
+
+    /** 待补回血量期间玩家受到真实伤害：标记后不再补回，避免把伤害治疗掉 */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onExternalDamage(EntityDamageEvent event) {
+        if (!(event.getEntity() instanceof Player player)) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        if (pendingJoinHealthRestore.containsKey(playerId) || preDisabledWorldHealth.containsKey(playerId)) {
+            healthModifiedExternally.add(playerId);
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
         final UUID playerId = player.getUniqueId();
         final String playerName = player.getName();
-        PeachIntegrationAPI.setPeachBonusSuppressed(player, false);
+        // 退出前恢复蟠桃 modifier，但要保留真实血量（不能像战斗结束那样补满，
+        // 否则会把“满血”当成真实血量写库，切服后非蟠桃造成的掉血就丢了）
+        PeachIntegrationAPI.restoreSuppressedBonusKeepingHealth(player);
         final double currentHealth = player.getHealth();
 
         playersInDisabledWorld.remove(playerId);
@@ -328,6 +422,9 @@ public class PeachListener implements Listener {
         PeachIntegrationAPI.clearBattleStatus(playerId);
         pendingSnapshots.remove(playerId);
         lastLocalBonusChange.remove(playerId);
+        pendingJoinHealthRestore.remove(playerId);
+        preDisabledWorldHealth.remove(playerId);
+        healthModifiedExternally.remove(playerId);
 
         // 跨服快照：先同步落 Redis（通常 < 1ms），确保切服时目标服登录能立刻读到最新血量；
         // 数据库写入仍然异步，二者互不阻塞
@@ -353,7 +450,7 @@ public class PeachListener implements Listener {
             }
             // 只更新 current_health：绝不重写 peach_bonus，
             // 否则数据库卡顿时这次"读旧值再写回"会把并发的吃桃/死亡惩罚结果覆盖掉
-            boolean updated = db.updateCurrentHealth(playerId, currentHealth);
+            boolean updated = db.updateCurrentHealth(playerId, quitHealth);
             // 数据库写成功后再补一次 Redis：退出瞬间的 Redis 写失败也能收敛，避免快照长期陈旧
             if (updated) {
                 RedisSyncManager r = plugin.getRedisSyncManager();
@@ -791,6 +888,8 @@ public class PeachListener implements Listener {
         AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
         if (attr != null) {
             double healthBefore = player.getHealth();
+            // 记住进入前血量，离开屏蔽世界时用于还原（避免非蟠桃血量被永久压低）
+            preDisabledWorldHealth.put(playerUuid, healthBefore);
             // 先移除蟠桃血量加成
             HealthModifierUtil.clearPeachBonus(attr);
             plugin.updateHealthScale(player);
@@ -816,6 +915,8 @@ public class PeachListener implements Listener {
         }
 
         playersInDisabledWorld.remove(playerUuid);
+        // 取出进入屏蔽世界前的血量，离开时用于还原非蟠桃血量
+        final Double recordedPreHealth = preDisabledWorldHealth.remove(playerUuid);
 
         UUID playerId = player.getUniqueId();
         plugin.runAsync(() -> {
@@ -842,9 +943,18 @@ public class PeachListener implements Listener {
                 HealthModifierUtil.applyPeachBonus(player, attr, peachBonus);
                 plugin.updateHealthScale(player);
 
-                if (!PeachIntegrationAPI.isPeachBonusSuppressed(player.getUniqueId())
-                        && plugin.getConfig().getBoolean("world_integration.restore_full_health_on_exit", true)) {
+                boolean suppressed = PeachIntegrationAPI.isPeachBonusSuppressed(player.getUniqueId());
+                boolean restoreFull = plugin.getConfig().getBoolean("world_integration.restore_full_health_on_exit", true);
+                boolean externallyModified = healthModifiedExternally.remove(playerId);
+                if (!suppressed && restoreFull) {
                     player.setHealth(attr.getValue());
+                } else if (!suppressed && !externallyModified && recordedPreHealth != null
+                        && !player.isDead() && player.getHealth() > 0) {
+                    // 不补满时，至少还原进屏蔽世界前的血量（不高于新上限）
+                    double target = Math.min(recordedPreHealth, attr.getValue());
+                    if (target > player.getHealth() + 0.001) {
+                        player.setHealth(target);
+                    }
                 }
             }, delayTicks);
         });
@@ -889,7 +999,11 @@ public class PeachListener implements Listener {
         }
 
         double maxHealth = plugin.getConfig().getDouble("world_max_health.worlds." + worldName);
-        double worldBonus = attr != null ? maxHealth - attr.getBaseValue() : 0;
+        // 配置的是“该世界的总最大生命值”：要减去除世界上限 modifier 外的所有贡献
+        // （基础值 + 蟠桃加成 + 其它插件 modifier），否则叠加后会顶穿/算错世界上限。
+        double currentWorldBonus = attr == null ? 0.0
+            : HealthModifierUtil.getAmount(attr, WORLD_MAX_HEALTH_MODIFIER_UUID);
+        double worldBonus = attr != null ? maxHealth - (attr.getValue() - currentWorldBonus) : 0;
 
         // 世界没变**且** modifier 数值已经正确时才跳过；
         // 只比较世界名会让 /luckypeach world setmax 与配置热重载对当前世界的玩家完全失效

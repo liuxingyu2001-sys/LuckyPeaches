@@ -60,6 +60,36 @@ public class PeachIntegrationAPI {
         if (plugin != null) plugin.updateHealthScale(player);
     }
 
+    /**
+     * 恢复被屏蔽的蟠桃加成，但<b>保留玩家的真实当前血量</b>（只做上限夹取，不补满）。
+     *
+     * <p>{@link #setPeachBonusSuppressed(Player, boolean)} 在解除屏蔽时会把存活玩家补满，
+     * 这对战斗结束是可接受的；但在退出/关服保存前调用的话，会把"满血"当成真实血量写库，
+     * 导致切服后非蟠桃造成的真实掉血丢失。退出保存应改用本方法。</p>
+     */
+    public static void restoreSuppressedBonusKeepingHealth(Player player) {
+        if (player == null) return;
+        if (!org.bukkit.Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("蟠桃血量屏蔽 API 必须在主线程调用");
+        }
+        UUID uuid = player.getUniqueId();
+        Double bonus = suppressedBonuses.get(uuid);
+        if (bonus == null) {
+            return; // 未被屏蔽，无需处理
+        }
+        org.bukkit.attribute.AttributeInstance attr =
+            player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+        if (attr == null) return;
+        double health = player.getHealth();
+        HealthModifierUtil.applyPeachBonus(attr, isWorldBlocked(player) ? 0 : bonus);
+        suppressedBonuses.remove(uuid);
+        // 恢复加成后上限只会变大，因此这里不会丢失真实血量
+        if (!player.isDead() && health > 0) player.setHealth(Math.min(health, attr.getValue()));
+        else if (health > attr.getValue()) player.setHealth(attr.getValue());
+        LuckyPeaches plugin = LuckyPeaches.getInstance();
+        if (plugin != null) plugin.updateHealthScale(player);
+    }
+
     public static boolean isPeachBonusSuppressed(UUID uuid) {
         return uuid != null && suppressedBonuses.containsKey(uuid);
     }

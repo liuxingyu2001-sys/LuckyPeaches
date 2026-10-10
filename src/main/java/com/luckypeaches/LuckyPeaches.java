@@ -14,8 +14,10 @@ public class LuckyPeaches extends JavaPlugin {
     private MessageManager messageManager;
     private PeachListener peachListener;
     private PeachPlaceholder placeholder;
-    /** 跨服血量快照（Redis）；未启用/连接失败时自禁用 */
+    /** 跨服血量快照（Redis）；未启用/连接失败/已委托时为空 */
     private RedisSyncManager redisSyncManager;
+    /** 是否把跨服生命同步委托给 SparrowSync（本插件只用数据库作蟠桃加成的权威与备份） */
+    private boolean healthDelegatedToSparrow;
     private boolean pluginInitialized = false;
     private boolean debug = false;
 
@@ -356,8 +358,21 @@ public class LuckyPeaches extends JavaPlugin {
         this.backupManager = new BackupManager(this);
         this.backupManager.initialize();
 
-        this.redisSyncManager = new RedisSyncManager(this);
-        this.redisSyncManager.initialize();
+        // 跨服生命同步委托：装了 SparrowSync 且配置开启时，由它负责最大生命值/血量同步，
+        // 本插件只用数据库作为蟠桃加成的权威与备份，不再启用自研 Redis 与血量还原。
+        boolean sparrowPresent = getServer().getPluginManager().getPlugin("SparrowSync") != null;
+        boolean delegateRequested = getConfig().getBoolean("sparrow_sync_delegate_health", false);
+        this.healthDelegatedToSparrow = delegateRequested && sparrowPresent;
+        if (delegateRequested && !sparrowPresent) {
+            getLogger().warning("sparrow_sync_delegate_health=true 但未检测到 SparrowSync，仍使用本插件同步");
+        } else if (this.healthDelegatedToSparrow) {
+            getLogger().info("跨服生命同步已委托给 SparrowSync；本插件数据库仅作为蟠桃加成的权威与备份");
+        }
+
+        if (!this.healthDelegatedToSparrow) {
+            this.redisSyncManager = new RedisSyncManager(this);
+            this.redisSyncManager.initialize();
+        }
 
         this.peachManager = new PeachManager(this);
         this.peachManager.loadPeaches();
@@ -390,7 +405,7 @@ public class LuckyPeaches extends JavaPlugin {
         }
 
         for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {
-            try { PeachIntegrationAPI.setPeachBonusSuppressed(player, false); }
+            try { PeachIntegrationAPI.restoreSuppressedBonusKeepingHealth(player); }
             catch (RuntimeException error) { getLogger().warning("恢复蟠桃血量失败: " + player.getUniqueId() + " - " + error.getMessage()); }
         }
         saveAllOnlinePlayers();
@@ -457,7 +472,14 @@ public class LuckyPeaches extends JavaPlugin {
 
                 // 只更新血量列：蟠桃加成在发生变化时（吃桃/死亡惩罚/sethealth）就已入库，
                 // 这里再"读出来写回去"只会在数据库卡顿时把并发写入覆盖成旧值
-                databaseManager.updateCurrentHealth(playerId, currentHealth);
+                // 死亡状态（血量 0）写当前血量没有意义，改存上限，下次登录不会拿到 1 血
+                double healthToSave = currentHealth;
+                if (healthToSave <= 0) {
+                    org.bukkit.attribute.AttributeInstance attr =
+                        player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+                    healthToSave = attr == null ? currentHealth : attr.getValue();
+                }
+                databaseManager.updateCurrentHealth(playerId, healthToSave);
 
                 // 关服时也刷新一次跨服快照，便于代理把玩家迁到别的服时血量无缝
                 RedisSyncManager redis = redisSyncManager;
@@ -492,6 +514,11 @@ public class LuckyPeaches extends JavaPlugin {
 
     public RedisSyncManager getRedisSyncManager() {
         return redisSyncManager;
+    }
+
+    /** 跨服生命同步是否已委托给 SparrowSync（此时本插件不再自行还原血量） */
+    public boolean isHealthDelegatedToSparrow() {
+        return healthDelegatedToSparrow;
     }
 
     public boolean isDebug() {

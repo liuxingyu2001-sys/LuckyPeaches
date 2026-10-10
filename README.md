@@ -66,6 +66,7 @@ mvn clean package
 | Spigot/Paper 1.13+ | ✅ | 运行环境（推荐 Paper 1.21） |
 | MySQL Connector + HikariCP | ❌ | MySQL 模式需要，服务器通过 `libraries` 自动下载 |
 | Jedis（Redis） | ❌ | 跨服血量同步需要，服务器通过 `libraries` 自动下载 |
+| SparrowSync | ❌ | 可选：把跨服生命同步完全交给它（见下文“委托给 SparrowSync”） |
 | PlaceholderAPI | ❌ | 占位符扩展（`softdepend`） |
 | CraftEngine | ❌ | 自定义物品模型 |
 
@@ -97,7 +98,7 @@ config_poll_interval: 5                             # 配置变更检测间隔�
 ### 后端 `config.yml`
 
 - **顶部** — `shared_config_dir`、`config_poll_interval`
-- **`settings`** — 调试模式、`base_max_health`、数据库、最大生命值上限、VIP 分组、死亡惩罚、音效、粒子、血量缩放、自动备份
+- **`settings`** — 调试模式、`base_max_health`、`force_base_max_health`、`join_health_restore_delay_ticks`、数据库、最大生命值上限、VIP 分组、死亡惩罚、音效、粒子、血量缩放、自动备份
 - **`world_integration`** — 世界屏蔽（进入/离开行为、回满血设置）
 - **`world_max_health`** — 按世界的最大生命值
 - **`peaches.yml`** — 蟠桃定义（`display_name`、`material`、`lore`、`health_bonus`、`max_consume_health`、`chance`、`custom_model_data`、`craftengine_model`）
@@ -173,6 +174,38 @@ redis:
 - 修改 `redis` 配置需重启服务器后生效（不随 `/luckypeach reload` 重连）。
 - 快照里存的是**真实持久化加成**，因此战斗中（`setPeachBonusSuppressed`）也不会被误写成 0。
 - 若仍看到明显掉血，通常是切服瞬间的真实伤害（如落地/窒息）；本插件已保证不会因为同步时序而额外改动血量。
+
+### 委托给 SparrowSync（可选，将跨服生命交给专业同步插件）
+
+如果群组服已经安装 [sparrow-sync](https://github.com/NanamoServer/sparrow-sync)，可以把跨服生命同步完全交给它，本插件则退居**蟠桃加成的权威与备份数据库**：
+
+```yaml
+sparrow_sync_delegate_health: true
+```
+
+开启后（且检测到 SparrowSync）：
+
+- 本插件**不再启用 Redis、不再自行还原 `current_health`**，最大生命值与当前血量由 SparrowSync 负责。
+- 本插件仍然把 `peach_bonus` 与 `current_health` 写入自己的数据库作为备份，并在登录后异步把 `peach_bonus` 对应的 modifier 校准到数据库值（若 SparrowSync 已正确恢复则无操作）。
+- SparrowSync 未安装时该配置被忽略并输出一条警告，回退到本插件自带的同步逻辑（Redis 或数据库）。
+
+使用前请确保 SparrowSync：
+
+- `data-types.health: true` 与 `data-types.attributes: true`（默认已开启）。
+- 把 `LuckyPeachesWorldMax` 加入 `attributes.modifier-blacklist`——它是**逐世界**的上限，不能跨服同步。
+- `LuckyPeaches` modifier 由本插件数据库权威，只要两边配置一致就不会互相覆盖。
+
+> 建议：要么用本插件自带同步（Redis / 数据库），要么用 SparrowSync，不要两套同时开。开启委托后本插件会自动关掉自己的那份。
+
+### 非蟠桃血量与其它插件的兼容
+
+本插件只负责**蟠桃加成 + 当前血量**的跨服同步，非蟠桃最大生命（其它插件的 modifier/基础值）由对应插件自己同步。为避免本插件在同步时误伤非蟠桃血量：
+
+- `settings.base_max_health` 默认**只接管仍为原版默认值(20) 的基础最大生命值**，不会覆盖其它插件用 `setBaseValue` 设置的基础生命。要恢复旧行为（每次登录强制设为该值）请设 `force_base_max_health: true`。
+- `settings.join_health_restore_delay_ticks`（默认 40 tick）：其它插件的最大生命加成通常晚于本插件应用，若登录血量被当时的偏低上限夹低，会在该延迟后补回到记录值；期间若玩家受到**真实伤害**则放弃补回，不会把伤害治掉。
+- **退出/关服保存不再补满**：战斗中玩家（`setPeachBonusSuppressed`）退出时只恢复 modifier、保留真实血量，不会把“满血”写库。
+- 进入屏蔽世界时会记录进入前血量，离开时按配置还原（`restore_full_health_on_exit: true` 补满；否则至少还原到进入前血量），避免非蟠桃血量被永久压低。
+- `world_max_health` 配置的是**该世界的总最大生命值**，会扣除基础值/蟠桃加成/其它插件 modifier 后计算所需增量，叠加其它加成后不会顶穿。
 
 自动备份支持 SQLite（VACUUM INTO）和 MySQL（YML/JSON 导出）两种模式。
 

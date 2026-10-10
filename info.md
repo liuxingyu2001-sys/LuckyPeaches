@@ -138,6 +138,45 @@ nulls the static `instance`. **Any new static collection must be cleared there t
 - Ownership changed: `current_health` is no longer vestigial — it is read on join when no snapshot exists.
   Guard: values `<= 0` (missing row / death-time write) are ignored, so new players are not clamped to 1 HP.
 
+### Non-peach health safety (other plugins / base health)
+
+The plugin only owns the peach modifier + current health. To stop cross-server sync from destroying health that
+belongs to other plugins:
+
+- **Deferred top-up** (`settings.join_health_restore_delay_ticks`, default 40): other plugins' max-health
+  modifiers are often applied after our `PlayerJoinEvent`. If the recorded health was clamped by the then-lower
+  max, `restoreHealthWithPending` schedules a delayed `reconcileRestoredHealth` that raises health back to the
+  recorded value once the max grows. `PeachListener.onExternalDamage` (MONITOR) marks the player on real
+  damage, and the reconcile then refuses to top up — so damage is never healed away.
+- **Base health is no longer force-overwritten**: it is only set when the current base is the vanilla default
+  (20) unless `settings.force_base_max_health: true`. Otherwise another plugin's `setBaseValue` survives.
+- **Quit/shutdown no longer heal suppressed players**: `PeachIntegrationAPI.restoreSuppressedBonusKeepingHealth`
+  restores the modifier but keeps the real health (the normal `setPeachBonusSuppressed(false)` heals to full,
+  which is only appropriate when a battle ends).
+- **Disabled worlds**: `preDisabledWorldHealth` records the pre-entry health; on exit it is restored (or fully
+  healed per `restore_full_health_on_exit`), unless real damage happened in the meantime
+  (`healthModifiedExternally`).
+- **World max health** now computes the needed delta as `configured - (getValue() - currentWorldModifier)`,
+  so peach/other modifiers no longer push the total past the configured world cap.
+- Dead players are stored at max instead of `0` (`saveAllOnlinePlayers`, quit path), avoiding a `0` row that the
+  join guard must ignore.
+
+### Optional: delegate cross-server health to SparrowSync
+
+`sparrow_sync_delegate_health: true` (with SparrowSync installed) makes LuckyPeaches stop being the health
+transport and become the **authority + backup database** for `peach_bonus` only:
+
+- Redis is not initialized (`getRedisSyncManager()` stays `null`; `onPreLogin`/quit/flush are no-ops).
+- `onJoin` reconciliation still corrects the `LuckyPeaches` modifier from the DB (no-op if SparrowSync already
+  restored it) but **never writes `current_health`** — the health that SparrowSync restored is left untouched.
+- The disabled-world join branch also skips its `setHealthQuietly`.
+- The DB keeps receiving `peach_bonus` + `current_health` (backup).
+- Requires SparrowSync `data-types.health`/`attributes` = true; blacklist `LuckyPeachesWorldMax` (world-local).
+- If SparrowSync is absent the flag is ignored with a warning and the normal Redis/DB path runs.
+
+`SparrowSync` is listed in `softdepend`, so no hard dependency/class reference is needed — detection is by
+plugin name only.
+
 ### Config merge gotcha
 
 `Configuration.contains(path)` falls back to the section's `defaults`. The plugin config always has defaults

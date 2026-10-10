@@ -26,11 +26,26 @@ redis:
   # 周期兜底上报在线玩家血量的间隔（秒），0 = 禁用
   flush_interval_seconds: 60
 
+# 跨服生命同步委托给 SparrowSync（可选）
+# true 且已安装 SparrowSync 时：本插件不再自己做跨服血量还原（不启用 Redis、
+# 不还原 current_health），由 SparrowSync 负责最大生命值/当前血量/属性同步；
+# 本插件的数据库仍作为蟠桃加成的权威与备份（登录后仅校准 peach_bonus 对应的 modifier）。
+# 使用前需确保 SparrowSync 的 data-types.health 与 data-types.attributes 为 true，
+# 并把 LuckyPeachesWorldMax 加入 attributes.modifier-blacklist（世界专属，不能跨服）。
+sparrow_sync_delegate_health: false
+
 settings:
   # 调试模式
   debug: false
   # 登录时设置基础最大生命值（≤0 禁用）
   base_max_health: 20.0
+  # 是否无条件接管基础最大生命值：
+  # false = 仅当基础值仍为原版默认(20) 时才设置，避免覆盖其它插件通过 setBaseValue 设置的基础生命
+  # true  = 每次登录都强制设为 base_max_health（旧行为）
+  force_base_max_health: false
+  # 登录血量补回延迟（tick）：其它插件的最大生命加成通常晚于本插件应用，
+  # 若登录时血量被当前上限夹低，会在该延迟后补回到记录值（期间受到真实伤害则不补）
+  join_health_restore_delay_ticks: 40
   # 数据库配置
   database:
     # 数据库类型: sqlite 或 mysql
