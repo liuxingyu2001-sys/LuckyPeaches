@@ -98,7 +98,7 @@ config_poll_interval: 5                             # 配置变更检测间隔�
 ### 后端 `config.yml`
 
 - **顶部** — `shared_config_dir`、`config_poll_interval`
-- **`settings`** — 调试模式、`base_max_health`、`force_base_max_health`、`join_health_restore_delay_ticks`、数据库、最大生命值上限、VIP 分组、死亡惩罚、音效、粒子、血量缩放、自动备份
+- **`settings`** — 调试模式、`base_max_health`、`force_base_max_health`、`join_health_restore_delay_ticks`、`suppressed_restore_health`、数据库、最大生命值上限、VIP 分组、死亡惩罚、音效、粒子、血量缩放、自动备份
 - **`world_integration`** — 世界屏蔽（进入/离开行为、回满血设置）
 - **`world_max_health`** — 按世界的最大生命值
 - **`peaches.yml`** — 蟠桃定义（`display_name`、`material`、`lore`、`health_bonus`、`max_consume_health`、`chance`、`custom_model_data`、`craftengine_model`）
@@ -173,6 +173,7 @@ redis:
 - Redis 连续失败会自动熔断 30 秒后重试，期间不阻塞登录/吃桃等主线程操作。
 - 修改 `redis` 配置需重启服务器后生效（不随 `/luckypeach reload` 重连）。
 - 快照里存的是**真实持久化加成**，因此战斗中（`setPeachBonusSuppressed`）也不会被误写成 0。
+- 屏蔽世界内桃 modifier 会被临时清空，插件会缓存进入前的真实加成：即使玩家站在屏蔽世界退出，快照/退出保存也写真实值，不会写成 0（下次仍会按目标世界规则决定是否生效）。
 - 若仍看到明显掉血，通常是切服瞬间的真实伤害（如落地/窒息）；本插件已保证不会因为同步时序而额外改动血量。
 
 ### 委托给 SparrowSync（可选，将跨服生命交给专业同步插件）
@@ -194,6 +195,7 @@ sparrow_sync_delegate_health: true
 - `data-types.health: true` 与 `data-types.attributes: true`（默认已开启）。
 - 把 `LuckyPeachesWorldMax` 加入 `attributes.modifier-blacklist`——它是**逐世界**的上限，不能跨服同步。
 - `LuckyPeaches` modifier 由本插件数据库权威，只要两边配置一致就不会互相覆盖。
+- **抑制态不跨服**：`setPeachBonusSuppressed` 只在本服内存；切服后目标服按数据库/快照恢复真实加成。委托模式下本插件不自行补血，故若 sparrow 未同步 `LuckyPeaches` modifier，玩家血量会停在 sparrow 恢复的值（建议让 sparrow 同步该 modifier）。
 
 > 建议：要么用本插件自带同步（Redis / 数据库），要么用 SparrowSync，不要两套同时开。开启委托后本插件会自动关掉自己的那份。
 
@@ -203,8 +205,8 @@ sparrow_sync_delegate_health: true
 
 - `settings.base_max_health` 默认**只接管仍为原版默认值(20) 的基础最大生命值**，不会覆盖其它插件用 `setBaseValue` 设置的基础生命。要恢复旧行为（每次登录强制设为该值）请设 `force_base_max_health: true`。
 - `settings.join_health_restore_delay_ticks`（默认 40 tick）：其它插件的最大生命加成通常晚于本插件应用，若登录血量被当时的偏低上限夹低，会在该延迟后补回到记录值；期间若玩家受到**真实伤害**则放弃补回，不会把伤害治掉。
-- **退出/关服保存不再补满**：战斗中玩家（`setPeachBonusSuppressed`）退出时只恢复 modifier、保留真实血量，不会把“满血”写库。
-- 进入屏蔽世界时会记录进入前血量，离开时按配置还原（`restore_full_health_on_exit: true` 补满；否则至少还原到进入前血量），避免非蟠桃血量被永久压低。
+- **退出/关服保存默认不补满**：战斗中玩家（`setPeachBonusSuppressed`）退出时只恢复 modifier、保留真实血量，不会把“满血”写库；确需补满可设 `settings.suppressed_restore_health: true`。
+- 进入屏蔽世界时会记录进入前血量（并缓存真实蟠桃加成，避免退出快照写成 0），离开时按配置还原（`restore_full_health_on_exit: true` 补满；否则至少还原到进入前血量），避免非蟠桃血量被永久压低。
 - `world_max_health` 配置的是**该世界的总最大生命值**，会扣除基础值/蟠桃加成/其它插件 modifier 后计算所需增量，叠加其它加成后不会顶穿。
 
 自动备份支持 SQLite（VACUUM INTO）和 MySQL（YML/JSON 导出）两种模式。
@@ -242,6 +244,9 @@ PeachIntegrationAPI.setPeachBonusSuppressed(player, true);
 // 2.2.9：结束/退出/关服先同步恢复加成并为存活玩家补满，再解除死亡豁免并异步校准
 PeachIntegrationAPI.setPeachBonusSuppressed(player, false);
 PeachIntegrationAPI.setPlayerNotInBattle(player);
+
+// 2.3.1：退出/关服保存前只想恢复属性、保留真实血量（不补满）时用它
+PeachIntegrationAPI.restoreSuppressedBonusKeepingHealth(player);
 
 // 检查是否战斗中（战斗中死亡不扣蟠桃血）
 PeachIntegrationAPI.isPlayerInBattle(player.getUniqueId());

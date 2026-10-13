@@ -150,9 +150,15 @@ belongs to other plugins:
   damage, and the reconcile then refuses to top up — so damage is never healed away.
 - **Base health is no longer force-overwritten**: it is only set when the current base is the vanilla default
   (20) unless `settings.force_base_max_health: true`. Otherwise another plugin's `setBaseValue` survives.
-- **Quit/shutdown no longer heal suppressed players**: `PeachIntegrationAPI.restoreSuppressedBonusKeepingHealth`
+- **Quit/shutdown no longer heal suppressed players by default**: `PeachIntegrationAPI.restoreSuppressedBonusKeepingHealth`
   restores the modifier but keeps the real health (the normal `setPeachBonusSuppressed(false)` heals to full,
-  which is only appropriate when a battle ends).
+  which is only appropriate when a battle ends). Set `settings.suppressed_restore_health: true` to opt back into
+  the heal-on-un-suppress behaviour on quit/shutdown.
+- **Suppression is per-server and never persisted**: `suppressedBonuses`/`blockedWorldBonuses` are static
+  in-memory maps, cleared on quit and on `onDisable`. `persistentPeachBonus(player)` is the safe accessor:
+  it returns the real bonus while suppressed and, inside a disabled world, the bonus cached from before entry
+  (`PeachIntegrationAPI.cacheBlockedWorldBonus`). Every Redis/DB snapshot therefore carries the real value even
+  if the player quits from a disabled world (previously the snapshot stored `0`).
 - **Disabled worlds**: `preDisabledWorldHealth` records the pre-entry health; on exit it is restored (or fully
   healed per `restore_full_health_on_exit`), unless real damage happened in the meantime
   (`healthModifiedExternally`).

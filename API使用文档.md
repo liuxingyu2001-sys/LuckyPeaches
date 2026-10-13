@@ -1,6 +1,6 @@
 # LuckyPeaches API 使用说明
 
-本文对应 **2.2.9**。服务端和编译依赖均需更新为 `Liu-LuckyPeaches-2.2.9.jar`；不要把 LuckyPeaches 打包进调用插件，使用 `provided` 或 `compileOnly`，并声明 `softdepend: [LuckyPeaches]`。
+本文对应 **2.3.2**。服务端和编译依赖均需更新为 `Liu-LuckyPeaches-2.3.2.jar`；不要把 LuckyPeaches 打包进调用插件，使用 `provided` 或 `compileOnly`，并声明 `softdepend: [LuckyPeaches]`。
 
 API 类：`com.luckypeaches.PeachIntegrationAPI`。
 
@@ -14,8 +14,10 @@ API 类：`com.luckypeaches.PeachIntegrationAPI`。
 | `setPlayerNotInBattle(Player)` | 清除标记，异步读取数据库并校准蟠桃 modifier，然后为存活玩家补满实际血量；null/离线忽略 |
 | `isPlayerInBattle(UUID)` | 查询死亡豁免标记 |
 | `setPeachBonusSuppressed(Player, true)` | **2.2.8 新增**，立即屏蔽蟠桃血量 modifier，保留待恢复数值 |
-| `setPeachBonusSuppressed(Player, false)` | **2.2.8 新增**，立即解除屏蔽并恢复缓存数值，无须等待数据库或调度任务 |
+| `setPeachBonusSuppressed(Player, false)` | **2.2.8 新增**，立即解除屏蔽并恢复缓存数值，无须等待数据库或调度任务；存活玩家补满 |
+| `restoreSuppressedBonusKeepingHealth(Player)` | **2.3.1 新增**，解除屏蔽但**保留真实当前血量**（只向上限夹取，不补满），退出/关服保存前使用 |
 | `isPeachBonusSuppressed(UUID)` | 查询血量屏蔽状态 |
+| `persistentPeachBonus(Player)` | **2.3.1 新增**，返回真实持久化加成（屏蔽中返回待恢复值；屏蔽世界内返回进入前缓存值），跨服快照/占位符必须用它 |
 
 `setPeachBonusSuppressed` 必须在 Bukkit **主线程**调用，错误线程抛出异常。null 忽略；重复启用不会把已移除后的 0 当成原加成，重复解除无副作用。它仅处理 LuckyPeaches 的蟠桃 modifier，不改变基础血量、装备/药水/其他插件 modifier，也不修改数据库中的永久蟠桃总量。
 
@@ -50,7 +52,7 @@ player.saveData();
 
 两个 API 独立配对；仅 `setPlayerNotInBattle` 不会解除显式血量屏蔽。旧版 LuckyPeaches 没有屏蔽 API，调用方应检查方法是否存在；需要公平血量的决斗应拒绝入场并提示升级，不能把仅设置死亡豁免当作血量屏蔽成功。
 
-正常退出和 LuckyPeaches 停用也会尝试同步解除血量屏蔽。屏蔽缓存只在本服内存中，不参与共享配置；强杀进程后依靠重新登录时的数据库校验恢复蟠桃总量，不能替代调用方的持久化装备/基础血量恢复记录。
+正常退出和 LuckyPeaches 停用也会尝试同步解除血量屏蔽：**默认只恢复属性、保留真实血量**（避免把“满血”当成真实血量写库）；把 `settings.suppressed_restore_health` 设为 `true` 则改为补满（旧行为）。屏蔽缓存只在本服内存中、不参与共享配置，也**不跨服**；切服后目标服按数据库/快照恢复真实加成（战斗屏蔽不会跟着走）。强杀进程后依靠重新登录时的数据库校验恢复蟠桃总量，不能替代调用方的持久化装备/基础血量恢复记录。
 
 ## 其他接口
 

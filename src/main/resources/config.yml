@@ -46,6 +46,10 @@ settings:
   # 登录血量补回延迟（tick）：其它插件的最大生命加成通常晚于本插件应用，
   # 若登录时血量被当前上限夹低，会在该延迟后补回到记录值（期间受到真实伤害则不补）
   join_health_restore_delay_ticks: 40
+  # 玩家退出/关服时若处于 API 屏蔽状态（setPeachBonusSuppressed），解除屏蔽时是否补满血量：
+  # false = 只恢复上限、保留真实血量（推荐，避免把“满血”写库导致切服掉血丢失）
+  # true  = 补满到恢复后的上限（旧行为，战斗中退出会被当成满血保存）
+  suppressed_restore_health: false
   # 数据库配置
   database:
     # 数据库类型: sqlite 或 mysql

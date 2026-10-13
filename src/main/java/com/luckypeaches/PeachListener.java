@@ -223,6 +223,7 @@ public class PeachListener implements Listener {
         if (isWorldDisabled(worldName)) {
             // 屏蔽世界：移除蟠桃 modifier，但仍需应用世界最大生命值设置
             playersInDisabledWorld.add(playerId);
+            PeachIntegrationAPI.cacheBlockedWorldBonus(player);
             HealthModifierUtil.clearPeachBonus(maxHealthAttr);
             if (plugin.isDebug()) {
                 plugin.getLogger().info("玩家 " + player.getName() + " 在屏蔽世界中，移除蟠桃加成");
@@ -410,9 +411,13 @@ public class PeachListener implements Listener {
         Player player = event.getPlayer();
         final UUID playerId = player.getUniqueId();
         final String playerName = player.getName();
-        // 退出前恢复蟠桃 modifier，但要保留真实血量（不能像战斗结束那样补满，
-        // 否则会把“满血”当成真实血量写库，切服后非蟠桃造成的掉血就丢了）
-        PeachIntegrationAPI.restoreSuppressedBonusKeepingHealth(player);
+        // 退出前恢复蟠桃 modifier。默认只恢复上限、保留真实血量（不能像战斗结束那样补满，
+        // 否则会把“满血”当成真实血量写库）；确需补满可开启 settings.suppressed_restore_health。
+        if (plugin.getConfig().getBoolean("settings.suppressed_restore_health", false)) {
+            PeachIntegrationAPI.setPeachBonusSuppressed(player, false);
+        } else {
+            PeachIntegrationAPI.restoreSuppressedBonusKeepingHealth(player);
+        }
         final double currentHealth = player.getHealth();
 
         playersInDisabledWorld.remove(playerId);
@@ -420,6 +425,7 @@ public class PeachListener implements Listener {
         eatingPlayers.remove(playerId);
         lastDeathTime.remove(playerId);
         PeachIntegrationAPI.clearBattleStatus(playerId);
+        PeachIntegrationAPI.clearBlockedWorldBonus(playerId);
         pendingSnapshots.remove(playerId);
         lastLocalBonusChange.remove(playerId);
         pendingJoinHealthRestore.remove(playerId);
@@ -890,7 +896,8 @@ public class PeachListener implements Listener {
             double healthBefore = player.getHealth();
             // 记住进入前血量，离开屏蔽世界时用于还原（避免非蟠桃血量被永久压低）
             preDisabledWorldHealth.put(playerUuid, healthBefore);
-            // 先移除蟠桃血量加成
+            // 先缓存真实加成，再移除蟠桃 modifier（避免退出快照写成 0）
+            PeachIntegrationAPI.cacheBlockedWorldBonus(player);
             HealthModifierUtil.clearPeachBonus(attr);
             plugin.updateHealthScale(player);
 
@@ -915,6 +922,7 @@ public class PeachListener implements Listener {
         }
 
         playersInDisabledWorld.remove(playerUuid);
+        PeachIntegrationAPI.clearBlockedWorldBonus(playerUuid);
         // 取出进入屏蔽世界前的血量，离开时用于还原非蟠桃血量
         final Double recordedPreHealth = preDisabledWorldHealth.remove(playerUuid);
 

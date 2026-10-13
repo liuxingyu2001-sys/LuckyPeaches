@@ -1,5 +1,7 @@
 package com.luckypeaches;
 
+import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.Player;
 
 import java.util.Collection;
@@ -29,6 +31,13 @@ public class PeachIntegrationAPI {
 
     // Main-thread mutations; async callers may query the flag safely.
     private static final java.util.Map<UUID, Double> suppressedBonuses = new ConcurrentHashMap<>();
+
+    /**
+     * 屏蔽世界内 modifier 会被清空（但不改数据库），这里缓存进入前的真实加成，
+     * 让 {@link #persistentPeachBonus(Player)} 在 modifier 为 0 时仍能返回真实值，
+     * 避免从屏蔽世界退出时的跨服快照 / 退出保存把加成写成 0。
+     */
+    private static final java.util.Map<UUID, Double> blockedWorldBonuses = new ConcurrentHashMap<>();
 
     /**
      * Temporarily suppress ONLY the peach health modifier. Call on the primary thread.
@@ -111,13 +120,39 @@ public class PeachIntegrationAPI {
         if (player == null) {
             return 0.0;
         }
-        Double suppressed = suppressedBonuses.get(player.getUniqueId());
+        UUID uuid = player.getUniqueId();
+        Double suppressed = suppressedBonuses.get(uuid);
         if (suppressed != null) {
             return suppressed;
         }
-        org.bukkit.attribute.AttributeInstance attr =
-            player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
+        // 屏蔽世界：modifier 被清空，回退到进入前缓存的真实加成（数据库仍是最终权威）
+        Double blocked = blockedWorldBonuses.get(uuid);
+        if (blocked != null && isWorldBlocked(player)) {
+            return blocked;
+        }
+        AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
         return attr == null ? 0.0 : HealthModifierUtil.getPeachBonus(attr);
+    }
+
+    /**
+     * 进入屏蔽世界、清空 modifier 之前调用，记录真实加成。
+     */
+    public static void cacheBlockedWorldBonus(Player player) {
+        if (player == null) {
+            return;
+        }
+        AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        if (attr == null) {
+            return;
+        }
+        blockedWorldBonuses.put(player.getUniqueId(), HealthModifierUtil.getPeachBonus(attr));
+    }
+
+    /** 离开屏蔽世界 / 退出后清除缓存，避免拿旧值回退。 */
+    public static void clearBlockedWorldBonus(UUID uuid) {
+        if (uuid != null) {
+            blockedWorldBonuses.remove(uuid);
+        }
     }
 
     private static boolean isWorldBlocked(Player player) {
@@ -206,6 +241,7 @@ public class PeachIntegrationAPI {
     public static void clearAllBattleStatus() {
         playersInBattle.clear();
         suppressedBonuses.clear();
+        blockedWorldBonuses.clear();
     }
 
     /**

@@ -405,8 +405,14 @@ public class LuckyPeaches extends JavaPlugin {
         }
 
         for (org.bukkit.entity.Player player : getServer().getOnlinePlayers()) {
-            try { PeachIntegrationAPI.restoreSuppressedBonusKeepingHealth(player); }
-            catch (RuntimeException error) { getLogger().warning("恢复蟠桃血量失败: " + player.getUniqueId() + " - " + error.getMessage()); }
+            try {
+                // 默认保留真实血量（避免把“满血”写库）；settings.suppressed_restore_health=true 时补满
+                if (getConfig().getBoolean("settings.suppressed_restore_health", false)) {
+                    PeachIntegrationAPI.setPeachBonusSuppressed(player, false);
+                } else {
+                    PeachIntegrationAPI.restoreSuppressedBonusKeepingHealth(player);
+                }
+            } catch (RuntimeException error) { getLogger().warning("恢复蟠桃血量失败: " + player.getUniqueId() + " - " + error.getMessage()); }
         }
         saveAllOnlinePlayers();
 
@@ -544,6 +550,8 @@ public class LuckyPeaches extends JavaPlugin {
             if (PeachListener.isPlayerInDisabledWorld(playerId)) {
                 if (HealthModifierUtil.getPeachBonus(maxHealthAttr) != 0) {
                     double healthBefore = player.getHealth();
+                    // 清空 modifier 前缓存真实加成，避免退出快照写成 0
+                    PeachIntegrationAPI.cacheBlockedWorldBonus(player);
                     HealthModifierUtil.clearPeachBonus(maxHealthAttr);
                     player.setHealth(Math.min(healthBefore, maxHealthAttr.getValue()));
                 }
