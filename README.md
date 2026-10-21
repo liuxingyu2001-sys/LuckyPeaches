@@ -372,3 +372,19 @@ PeachIntegrationAPI.clearNonPeachModifiers(player);
 - **战斗死亡豁免**：战斗中死亡不扣除蟠桃加成
 - **线程安全**：修复异步线程调用 Bukkit API、主线程阻塞 DB 等问题
 - **自动备份**：支持 SQLite（VACUUM INTO）和 MySQL（YML/JSON 导出）
+
+
+## 物品规格（LiuLib）
+
+`peaches.<id>.material` 支持 LiuLib 完整物品规格（需安装 LiuLib 1.0.5+）：
+
+```yaml
+peaches:
+  big_peach:
+    material: "APPLE"                        # 原版材质名（默认行为）
+    # material: "base64:H4sI..."             # 完整物品（Paper 二进制，NBT/组件全保真）
+    # material: "lib:gift:spring_2026"       # 物品库条目（需 liuitemlib）
+    # material: "ce:myitems:peach"           # CraftEngine 物品（也可继续用 craftengine_model）
+```
+
+规格写法不受支持或解析失败时回退原版材质（非法材质名仍回退 APPLE 并告警）。

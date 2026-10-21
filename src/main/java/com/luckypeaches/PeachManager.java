@@ -34,12 +34,16 @@ public class PeachManager {
         for (String key : section.getKeys(false)) {
             String displayName = ChatColor.translateAlternateColorCodes('&', section.getString(key + ".display_name", key));
             String materialStr = section.getString(key + ".material", "APPLE");
-            Material material;
-            try {
-                material = Material.valueOf(materialStr.toUpperCase(java.util.Locale.ROOT));
-            } catch (IllegalArgumentException e) {
-                plugin.getLogger().warning("蟠桃 '" + key + "' 的 material 无效: " + materialStr + "，已回退为 APPLE");
-                material = Material.APPLE;
+            // 完整物品规格（base64: / nbt: / lib: / ce: / 带数量写法）不是材质名，交给 LiuLib 构建
+            boolean specLike = materialStr.contains(":") || materialStr.length() > 40;
+            Material material = Material.APPLE;
+            if (!specLike) {
+                try {
+                    material = Material.valueOf(materialStr.toUpperCase(java.util.Locale.ROOT));
+                } catch (IllegalArgumentException e) {
+                    plugin.getLogger().warning("蟠桃 '" + key + "' 的 material 无效: " + materialStr + "，已回退为 APPLE");
+                    material = Material.APPLE;
+                }
             }
 
             List<String> lore = section.getStringList(key + ".lore").stream()
@@ -62,9 +66,21 @@ public class PeachManager {
             int cmd = section.getInt(key + ".custom_model_data", 0);
             String ceModel = section.getString(key + ".craftengine_model", "");
 
-            peaches.put(key, new PeachConfig(key, displayName, material, lore, healthBonus, chance, cmd, ceModel, maxConsumeHealth));
+            peaches.put(key, new PeachConfig(key, displayName, material, materialStr, lore, healthBonus, chance, cmd, ceModel, maxConsumeHealth));
         }
         plugin.getLogger().info("已加载 " + peaches.size() + " 种蟠桃配置");
+    }
+
+    /** 用 LiuLib 规格构建物品；LiuLib 未就绪/规格非法返回 null（调用方回退原版材质）。 */
+    private ItemStack buildFromSpec(String spec) {
+        if (spec == null || spec.isBlank()) {
+            return null;
+        }
+        try {
+            return com.liuxingyu.liulib.LiuLib.items().buildOrNull(spec.trim());
+        } catch (RuntimeException | LinkageError error) {
+            return null;
+        }
     }
 
     public ItemStack createPeachItem(String id, int amount) {
@@ -93,7 +109,14 @@ public class PeachManager {
         // CE 不可用或失败 → 原版创建（降级时必须补上显示名/lore/CMD，否则玩家拿到一个"无名"苹果）
         boolean vanillaFallback = item == null;
         if (vanillaFallback) {
-            item = new ItemStack(config.material, safeAmount);
+            // 首选 LiuLib 完整物品规格；材质名/规格非法时回退原版材质
+            ItemStack custom = buildFromSpec(config.materialSpec);
+            if (custom != null) {
+                custom.setAmount(Math.min(safeAmount, Math.max(1, custom.getMaxStackSize())));
+                item = custom;
+            } else {
+                item = new ItemStack(config.material, safeAmount);
+            }
         }
 
         // 写入 PDC 标识
@@ -136,20 +159,29 @@ public class PeachManager {
     public static class PeachConfig {
         public final String id, displayName, ceModel;
         public final Material material;
+        public final String materialSpec;
         public final List<String> lore;
         public final double healthBonus, chance, maxConsumeHealth;
         public final int customModelData;
 
         public PeachConfig(String id, String displayName, Material material, List<String> lore,
                           double healthBonus, double chance, int cmd, String ceModel) {
-            this(id, displayName, material, lore, healthBonus, chance, cmd, ceModel, 0.0);
+            this(id, displayName, material, material == null ? "" : material.name(), lore,
+                    healthBonus, chance, cmd, ceModel, 0.0);
         }
 
         public PeachConfig(String id, String displayName, Material material, List<String> lore,
                           double healthBonus, double chance, int cmd, String ceModel, double maxConsumeHealth) {
+            this(id, displayName, material, material == null ? "" : material.name(), lore,
+                    healthBonus, chance, cmd, ceModel, maxConsumeHealth);
+        }
+
+        public PeachConfig(String id, String displayName, Material material, String materialSpec, List<String> lore,
+                          double healthBonus, double chance, int cmd, String ceModel, double maxConsumeHealth) {
             this.id = id;
             this.displayName = displayName;
             this.material = material;
+            this.materialSpec = materialSpec == null ? "" : materialSpec;
             this.lore = lore;
             this.healthBonus = healthBonus;
             this.chance = chance;
