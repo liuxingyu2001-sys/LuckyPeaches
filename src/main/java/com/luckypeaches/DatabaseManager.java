@@ -123,6 +123,10 @@ public class DatabaseManager {
             plugin.getLogger().severe("数据库迁移失败: " + e.getMessage());
         }
 
+        // 历史数据归一：旧版本死亡惩罚（按百分比扣减）会往库里写 2621.75960666 这类长小数，
+        // 启动时统一四舍五入到 1 位。失败只告警，绝不影响插件启动。
+        normalizeLegacyPeachBonus();
+
         return true;
     }
 
@@ -391,6 +395,33 @@ public class DatabaseManager {
         return msg != null && msg.toLowerCase(java.util.Locale.ROOT).contains("duplicate column");
     }
 
+    /**
+     * 把历史遗留的长小数加成归一为 1 位小数。
+     *
+     * <p>SQLite / MySQL 都支持 {@code ROUND(x, 1)}，且对正数都是四舍五入。
+     * 只更新确实不是 1 位小数的行，正常启动时这条 UPDATE 基本不产生写入。
+     * 任何异常只告警：这是数据清理，不能阻断插件启动。</p>
+     */
+    private void normalizeLegacyPeachBonus() {
+        String sql = "UPDATE " + tableName + " SET peach_bonus = ROUND(peach_bonus, 1) "
+            + "WHERE peach_bonus IS NOT NULL AND ABS(peach_bonus - ROUND(peach_bonus, 1)) > 0.0000001";
+        synchronized (dbLock) {
+            try {
+                executeQuery(conn -> {
+                    try (Statement stmt = conn.createStatement()) {
+                        int updated = stmt.executeUpdate(sql);
+                        if (updated > 0) {
+                            plugin.getLogger().info("已把 " + updated + " 条历史蟠桃加成归一为 1 位小数");
+                        }
+                    }
+                    return null;
+                });
+            } catch (SQLException e) {
+                plugin.getLogger().warning("历史蟠桃加成归一失败（不影响运行）: " + e.getMessage());
+            }
+        }
+    }
+
     // ========== 保存 ==========
 
     /**
@@ -402,13 +433,15 @@ public class DatabaseManager {
         if (closed) {
             return false;
         }
+        // 所有 peach_bonus 写入统一收敛到 1 位小数：占位符/HUD/备份/其它插件读到的都是干净数值
+        final double storedBonus = HealthModifierUtil.roundToOneDecimal(peachBonus);
         synchronized (dbLock) {
             try {
                 executeQuery(conn -> {
                     try (PreparedStatement pstmt = conn.prepareStatement(upsertSql)) {
                         pstmt.setString(1, uuid.toString());
                         pstmt.setString(2, username);
-                        pstmt.setDouble(3, peachBonus);
+                        pstmt.setDouble(3, storedBonus);
                         pstmt.setDouble(4, currentHealth);
                         pstmt.executeUpdate();
                     }
@@ -473,7 +506,8 @@ public class DatabaseManager {
         }
         synchronized (dbLock) {
             double current = loadCompletePlayerData(uuid).getPeachBonus();
-            double updated = current + delta;
+            // 每次吃桃后按总量归一（而不是只舍入本次增量），长期累加也不会积累浮点长小数
+            double updated = HealthModifierUtil.roundToOneDecimal(current + delta);
             if (!savePlayerData(uuid, username, updated, currentHealth)) {
                 return null;
             }
@@ -534,9 +568,10 @@ public class DatabaseManager {
 
         synchronized (dbLock) {
             try {
+                final double storedBonus = HealthModifierUtil.roundToOneDecimal(newPeachBonus);
                 boolean updated = executeQuery(conn -> {
                     try (PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
-                        pstmt.setDouble(1, newPeachBonus);
+                        pstmt.setDouble(1, storedBonus);
                         pstmt.setString(2, uuid.toString());
                         return pstmt.executeUpdate() > 0;
                     }
@@ -576,7 +611,11 @@ public class DatabaseManager {
                         pstmt.setString(1, uuid.toString());
                         try (ResultSet rs = pstmt.executeQuery()) {
                             if (rs.next()) {
-                                return new PlayerHealthData(rs.getDouble("peach_bonus"), rs.getDouble("current_health"));
+                                // 读侧归一：旧版本已经落库的长小数（如 2621.75960666）会在这里被纠正，
+                                // 登录/占位符/扣罚计算都用 1 位小数值
+                                return new PlayerHealthData(
+                                    HealthModifierUtil.roundToOneDecimal(rs.getDouble("peach_bonus")),
+                                    rs.getDouble("current_health"));
                             }
                         }
                     }
@@ -611,7 +650,7 @@ public class DatabaseManager {
                                 result.add(new PlayerRankData(
                                     rs.getString("uuid"),
                                     rs.getString("username"),
-                                    rs.getDouble("peach_bonus")
+                                    HealthModifierUtil.roundToOneDecimal(rs.getDouble("peach_bonus"))
                                 ));
                             }
                         }
@@ -828,7 +867,8 @@ public class DatabaseManager {
                         for (Object[] row : data) {
                             pstmt.setString(1, (String) row[0]);
                             pstmt.setString(2, (String) row[1]);
-                            pstmt.setDouble(3, ((Number) row[2]).doubleValue());
+                            // 迁移/导入同样按 1 位小数落库，避免把旧库的长小数带到新库
+                            pstmt.setDouble(3, HealthModifierUtil.roundToOneDecimal(((Number) row[2]).doubleValue()));
                             pstmt.setDouble(4, ((Number) row[3]).doubleValue());
                             pstmt.addBatch();
                             if (++batched % BATCH_SIZE == 0) {

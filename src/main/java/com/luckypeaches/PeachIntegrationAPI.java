@@ -105,6 +105,8 @@ public class PeachIntegrationAPI {
 
     /** Every internal modifier write passes here, including delayed world/login/admin callbacks. */
     static double effectivePeachBonus(Player player, double bonus) {
+        // 缓存值也要归一：解除屏蔽时按缓存恢复，否则会把长小数再套回 modifier
+        bonus = HealthModifierUtil.roundToOneDecimal(bonus);
         if (suppressedBonuses.replace(player.getUniqueId(), bonus) != null) return 0;
         return bonus;
     }

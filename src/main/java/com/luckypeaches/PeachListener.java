@@ -518,14 +518,14 @@ public class PeachListener implements Listener {
         if (config.maxConsumeHealth > 0 && currentTotalHealth > config.maxConsumeHealth) {
             player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("peach_health_limit_reached",
                 "%peach%", config.displayName,
-                "%limit%", String.format("%.1f", config.maxConsumeHealth),
-                "%health%", String.format("%.1f", currentTotalHealth),
-                PLACEHOLDER_PEACH_HEALTH, String.format("%.1f", currentPeachBonus)));
+                "%limit%", HealthModifierUtil.formatOneDecimal(config.maxConsumeHealth),
+                "%health%", HealthModifierUtil.formatOneDecimal(currentTotalHealth),
+                PLACEHOLDER_PEACH_HEALTH, HealthModifierUtil.formatOneDecimal(currentPeachBonus)));
             return;
         }
         if (currentTotalHealth >= limit) {
             player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("max_health_reached",
-                PLACEHOLDER_PEACH_HEALTH, String.format("%.1f", currentPeachBonus)));
+                PLACEHOLDER_PEACH_HEALTH, HealthModifierUtil.formatOneDecimal(currentPeachBonus)));
             return;
         }
 
@@ -609,8 +609,8 @@ public class PeachListener implements Listener {
 
                         // 格式化健康值显示，保留一位小数
                         player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("success",
-                            "%bonus%", String.format("%.1f", config.healthBonus),
-                            PLACEHOLDER_PEACH_HEALTH, String.format("%.1f", newPeachBonus)));
+                            "%bonus%", HealthModifierUtil.formatOneDecimal(config.healthBonus),
+                            PLACEHOLDER_PEACH_HEALTH, HealthModifierUtil.formatOneDecimal(newPeachBonus)));
                     } finally {
                         eatingPlayers.remove(playerId);
                     }
@@ -621,7 +621,7 @@ public class PeachListener implements Listener {
             playConfiguredSound(player, "settings.fail_sound", "BLOCK_GLASS_BREAK", 0.8f);
 
             player.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("fail",
-                PLACEHOLDER_PEACH_HEALTH, String.format("%.1f", currentPeachBonus)));
+                PLACEHOLDER_PEACH_HEALTH, HealthModifierUtil.formatOneDecimal(currentPeachBonus)));
         }
     }
 
@@ -768,8 +768,12 @@ public class PeachListener implements Listener {
                     return;
                 }
 
-                double penalty = Math.max(minPenalty, Math.min(maxPenalty, currentPeachBonus * penaltyPercentage));
-                final double newPeachBonus = Math.max(0, currentPeachBonus - penalty);
+                // 扣罚值与剩余加成都归一为 1 位小数：否则“扣除 1%”会算出 2621.75960666 这类长小数，
+                // 而且消息里显示的扣罚值与实际扣减量会对不上（显示 26.5，实际扣了 26.4）
+                double penalty = HealthModifierUtil.roundToOneDecimal(
+                    Math.max(minPenalty, Math.min(maxPenalty, currentPeachBonus * penaltyPercentage)));
+                final double newPeachBonus = HealthModifierUtil.roundToOneDecimal(
+                    Math.max(0, currentPeachBonus - penalty));
 
                 // 写入扣罚结果，同时记录冷却时间戳（保留 current_health）
                 if (!db.saveDeathPenalty(playerId, newPeachBonus, deathTime)) {
@@ -829,11 +833,14 @@ public class PeachListener implements Listener {
     private String formatDeathPenaltyMessage(String template, double penalty, double remaining) {
         if (template.contains(PLACEHOLDER_PENALTY) || template.contains(PLACEHOLDER_PEACH_HEALTH)) {
             return template
-                .replace(PLACEHOLDER_PENALTY, String.format("%.1f", penalty))
-                .replace(PLACEHOLDER_PEACH_HEALTH, String.format("%.1f", remaining));
+                .replace(PLACEHOLDER_PENALTY, HealthModifierUtil.formatOneDecimal(penalty))
+                .replace(PLACEHOLDER_PEACH_HEALTH, HealthModifierUtil.formatOneDecimal(remaining));
         }
         try {
-            return String.format(template, penalty, remaining);
+            // 旧模板里如果用的是 %s 而不是 %.1f，也拿到 1 位小数值
+            return String.format(template,
+                HealthModifierUtil.roundToOneDecimal(penalty),
+                HealthModifierUtil.roundToOneDecimal(remaining));
         } catch (java.util.IllegalFormatException e) {
             plugin.getLogger().warning("death_penalty 消息模板格式错误，已按原文发送: " + e.getMessage());
             return template;

@@ -200,6 +200,27 @@ All modifier work goes through `HealthModifierUtil.apply/remove/getAmount` (`app
 skips adding when `amount <= 0`, so no zero-value modifiers are left behind). Don't hand-roll the
 stream-filter-remove-add dance at new call sites.
 
+### Health values: one decimal, everywhere
+
+`HealthModifierUtil.roundToOneDecimal(double)` / `formatOneDecimal(double)` are the single source of truth for
+the "peach health is shown with 1 decimal" rule. The old behaviour leaked raw doubles into the DB / HUD after a
+death penalty (e.g. `2621.75960666`, total `2641.7596`). Callers must not bypass them:
+
+- `HealthModifierUtil.applyPeachBonus` rounds before adding the modifier, `getPeachBonus` rounds when reading
+  (so modifiers written by older versions are displayed cleanly even before they are re-applied).
+- `DatabaseManager.savePlayerData` / `saveDeathPenalty` / `addPeachBonus` / `writeAllData` round on write;
+  `loadCompletePlayerData` / `getTopPlayers` round on read. `initialize()` also runs a one-shot
+  `UPDATE ... SET peach_bonus = ROUND(peach_bonus, 1)` (fails soft) to clean legacy long decimals.
+- `PeachListener` rounds the computed `penalty` / `newPeachBonus` before using them, so the value in the
+  `%penalty%` message matches the actual change (previously the message could say 26.5 while the total dropped
+  by 26.4).
+- `RedisSyncManager` rounds the snapshot `peach_bonus` on write and read (legacy snapshots included).
+- Use `formatOneDecimal` (Locale.ROOT) for every player-facing health number in commands/messages/placeholders
+  instead of `String.format("%.1f", ...)`.
+
+`current_health` is intentionally **not** rounded: it is the player's real HP (damage creates fractional values)
+and rounding it would slightly heal/damage players on every save/restore.
+
 ### Database hot-switch (`/luckypeach db`)
 
 Switches SQLite ↔ MySQL with data migration. Sequence: save online players → read all data → build the new

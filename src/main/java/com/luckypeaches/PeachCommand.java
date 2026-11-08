@@ -113,7 +113,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
             double peachBonus = plugin.getDatabaseManager().loadCompletePlayerData(targetId).getPeachBonus();
             plugin.runSync(() -> sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("get_health",
                 "%player%", targetName,
-                "%health%", String.format("%.1f", peachBonus))));
+                "%health%", HealthModifierUtil.formatOneDecimal(peachBonus))));
         });
     }
 
@@ -131,8 +131,10 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
         double newBonus;
         try {
-            newBonus = Double.parseDouble(args[2]);
-            if (newBonus < 0 || !Double.isFinite(newBonus)) throw new NumberFormatException();
+            double parsed = Double.parseDouble(args[2]);
+            if (parsed < 0 || !Double.isFinite(parsed)) throw new NumberFormatException();
+            // 与存储/显示保持一致：设置值先归一为 1 位小数
+            newBonus = HealthModifierUtil.roundToOneDecimal(parsed);
         } catch (NumberFormatException e) {
             sender.sendMessage(ChatColor.RED + "错误: 数值必须是非负数字。");
             return;
@@ -181,7 +183,7 @@ public class PeachCommand implements CommandExecutor, TabCompleter {
 
                 sender.sendMessage(plugin.getMessageManager().getPrefixedReplacedMessage("set_health_success",
                     "%player%", targetName,
-                    "%health%", String.format("%.1f", finalNewBonus)));
+                    "%health%", HealthModifierUtil.formatOneDecimal(finalNewBonus)));
             });
         });
     }

@@ -40,9 +40,10 @@ public class PeachPlaceholder extends PlaceholderExpansion {
 
         switch (params.toLowerCase(java.util.Locale.ROOT)) {
             case "peach_bonus":
-                return String.format("%.1f", getPeachBonusFromModifier(player));
+                return HealthModifierUtil.formatOneDecimal(getPeachBonusFromModifier(player));
 
             case "peach_bonus_raw":
+                // 数值本身在存储/读取时已归一为 1 位小数，这里只是不做格式化包装
                 return String.valueOf(getPeachBonusFromModifier(player));
 
             default:

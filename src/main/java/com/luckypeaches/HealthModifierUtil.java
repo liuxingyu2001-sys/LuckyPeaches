@@ -1,5 +1,7 @@
 package com.luckypeaches;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.UUID;
 import org.bukkit.attribute.AttributeInstance;
@@ -28,6 +30,37 @@ public final class HealthModifierUtil {
     public static final String WORLD_MAX_MODIFIER_NAME = "LuckyPeachesWorldMax";
 
     private HealthModifierUtil() {
+    }
+
+    // ========== 数值归一 ==========
+
+    /**
+     * 血量类数值统一保留 1 位小数（四舍五入）。
+     *
+     * <p>死亡惩罚按百分比扣减、以及浮点累加（如 0.1 + 0.2）都会算出
+     * {@code 2621.75960666} 这种长小数；如果原样存库并套到
+     * {@link AttributeModifier} 上，HUD / 占位符 / 其它读取属性的插件都会显示
+     * 一串小数位。所有写入数据库、套用 modifier、读取显示的血量值都走这里，
+     * 保证对玩家可见的蟠桃血量最多只有 1 位小数。</p>
+     *
+     * <p>用 {@link BigDecimal#valueOf(double)} 而不是 {@code Math.round(v * 10) / 10.0}：
+     * 后者会受二进制误差影响（例如 0.15 可能被舍成 0.1）。</p>
+     */
+    public static double roundToOneDecimal(double value) {
+        if (!Double.isFinite(value)) {
+            return 0.0;
+        }
+        return BigDecimal.valueOf(value).setScale(1, RoundingMode.HALF_UP).doubleValue();
+    }
+
+    /**
+     * 格式化显示用的 1 位小数文本。
+     *
+     * <p>固定 {@link java.util.Locale#ROOT}：部分语言环境（如德语）默认会把小数点
+     * 格式化成逗号，统一成 {@code 2621.8} 这种写法。</p>
+     */
+    public static String formatOneDecimal(double value) {
+        return String.format(java.util.Locale.ROOT, "%.1f", roundToOneDecimal(value));
     }
 
     /**
@@ -81,11 +114,12 @@ public final class HealthModifierUtil {
     // ========== 蟠桃加成 ==========
 
     public static double getPeachBonus(AttributeInstance attr) {
-        return getAmount(attr, PEACH_MODIFIER_UUID);
+        // 读取也归一：旧版本写进 modifier 的长小数会在下一次套用前就被显示成 1 位小数
+        return roundToOneDecimal(getAmount(attr, PEACH_MODIFIER_UUID));
     }
 
     public static void applyPeachBonus(AttributeInstance attr, double bonus) {
-        apply(attr, PEACH_MODIFIER_UUID, PEACH_MODIFIER_NAME, bonus);
+        apply(attr, PEACH_MODIFIER_UUID, PEACH_MODIFIER_NAME, roundToOneDecimal(bonus));
     }
 
     /** Player-aware writes honour temporary API suppression and remember the latest bonus. */

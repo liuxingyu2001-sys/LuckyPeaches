@@ -149,7 +149,8 @@ public class RedisSyncManager {
         try (Jedis jedis = pool.getResource()) {
             String key = key(uuid);
             Map<String, String> fields = new HashMap<>();
-            fields.put(FIELD_BONUS, Double.toString(peachBonus));
+            // 快照里的加成也按 1 位小数写：目标服登录直接套用/显示时不会出现长小数
+            fields.put(FIELD_BONUS, Double.toString(HealthModifierUtil.roundToOneDecimal(peachBonus)));
             fields.put(FIELD_HEALTH, Double.toString(health));
             fields.put(FIELD_MAX_HEALTH, Double.toString(maxHealth));
             fields.put(FIELD_USERNAME, username == null ? "" : username);
@@ -193,7 +194,8 @@ public class RedisSyncManager {
                 return null;
             }
             onSuccess();
-            return new Snapshot(Math.max(0.0, bonus), health, max, ts);
+            // 兼容旧快照（可能存着长小数）：读出来同样归一
+            return new Snapshot(HealthModifierUtil.roundToOneDecimal(Math.max(0.0, bonus)), health, max, ts);
         } catch (Exception e) {
             onFailure("读取快照", e);
             return null;
